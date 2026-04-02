@@ -16,12 +16,16 @@ jobs:
       with:
         go-version: '1.23'
 
+    - name: Install rsrc (for embedding EXE icon)
+      run: go install github.com/akavel/rsrc@latest
+
+    - name: Generate app.syso (EXE icon resource)
+      run: rsrc -ico clash.ico -o app.syso
+
     - name: Build Windows EXE
       run: |
-        go mod init mihomo_tray
-        go get github.com/getlantern/systray
-        go mod tidy          # 这一行解决 go.sum 问题
-        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe mihomo_tray.go
+        go mod tidy
+        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe
 
     - name: Upload EXE
       uses: actions/upload-artifact@v4
