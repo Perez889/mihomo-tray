@@ -9,33 +9,33 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
 
-    - name: Initialize Go module
-      shell: pwsh
-      run: |
-        if (-Not (Test-Path go.mod)) {
-            go mod init mihomo_tray
-        }
-        go mod tidy
+      - name: Initialize Go module
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path go.mod)) {
+              go mod init mihomo_tray
+          }
+          go mod tidy
 
-    - name: Install rsrc
-      run: go install github.com/akavel/rsrc@latest
+      - name: Install rsrc
+        run: go install github.com/akavel/rsrc@latest
 
-    - name: Generate 64bit app.syso
-      run: rsrc -arch amd64 -ico clash.ico -o app.syso
+      - name: Generate 64bit app.syso
+        run: rsrc -arch amd64 -ico clash.ico -o app.syso
 
-    - name: Build Windows EXE (IMPORTANT: build module, not file)
-      run: |
-        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe .
+      - name: Build Windows EXE (build module, not single file)
+        run: |
+          go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe .
 
-    - name: Upload EXE
-      uses: actions/upload-artifact@v4
-      with:
-        name: mihomo_tray_exe
-        path: mihomo_tray.exe
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo_tray_exe
+          path: mihomo_tray.exe
