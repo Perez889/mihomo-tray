@@ -17,10 +17,11 @@ jobs:
         go-version: '1.23'
 
     - name: Initialize Go module (auto-create go.mod / go.sum)
+      shell: pwsh
       run: |
-        if not exist go.mod (
-          go mod init mihomo_tray
-        )
+        if (-Not (Test-Path go.mod)) {
+            go mod init mihomo_tray
+        }
         go mod tidy
 
     - name: Install rsrc (for embedding EXE icon)
@@ -31,7 +32,7 @@ jobs:
 
     - name: Build Windows EXE
       run: |
-        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe
+        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe mihomo_tray.go
 
     - name: Upload EXE
       uses: actions/upload-artifact@v4
