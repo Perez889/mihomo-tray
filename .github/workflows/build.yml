@@ -16,6 +16,13 @@ jobs:
       with:
         go-version: '1.23'
 
+    - name: Initialize Go module (auto-create go.mod / go.sum)
+      run: |
+        if not exist go.mod (
+          go mod init mihomo_tray
+        )
+        go mod tidy
+
     - name: Install rsrc (for embedding EXE icon)
       run: go install github.com/akavel/rsrc@latest
 
@@ -24,7 +31,6 @@ jobs:
 
     - name: Build Windows EXE
       run: |
-        go mod tidy
         go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe
 
     - name: Upload EXE
