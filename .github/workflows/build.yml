@@ -20,10 +20,11 @@ jobs:
       run: |
         go mod init mihomo_tray
         go get github.com/getlantern/systray
+        go mod tidy          # 这一行解决 go.sum 问题
         go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe mihomo_tray.go
 
     - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:
-        name: mihomo_tray
+        name: mihomo_tray_exe
         path: mihomo_tray.exe
