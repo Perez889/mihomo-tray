@@ -1,0 +1,29 @@
+name: Build Mihomo Tray
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Build Windows EXE
+      run: |
+        go mod init mihomo_tray
+        go get github.com/getlantern/systray
+        go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe mihomo_tray.go
+
+    - name: Upload EXE
+      uses: actions/upload-artifact@v4
+      with:
+        name: mihomo_tray
+        path: mihomo_tray.exe
