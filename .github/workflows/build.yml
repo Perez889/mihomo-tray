@@ -16,7 +16,7 @@ jobs:
       with:
         go-version: '1.23'
 
-    - name: Initialize Go module (auto-create go.mod / go.sum)
+    - name: Initialize Go module
       shell: pwsh
       run: |
         if (-Not (Test-Path go.mod)) {
@@ -24,11 +24,11 @@ jobs:
         }
         go mod tidy
 
-    - name: Install rsrc (for embedding EXE icon)
+    - name: Install rsrc
       run: go install github.com/akavel/rsrc@latest
 
-    - name: Generate app.syso (EXE icon resource)
-      run: rsrc -ico clash.ico -o app.syso
+    - name: Generate 64bit app.syso
+      run: rsrc -arch amd64 -ico clash.ico -o app.syso
 
     - name: Build Windows EXE
       run: |
