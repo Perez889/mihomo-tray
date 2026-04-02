@@ -13,7 +13,8 @@ func main() {
 }
 
 func onReady() {
-	iconBytes, _ := os.ReadFile("clash.ico") // 推荐用 clash.ico
+	// 读取图标（推荐 clash.ico，如果没有就用 clash.png）
+	iconBytes, _ := os.ReadFile("clash.ico")
 	if len(iconBytes) == 0 {
 		iconBytes, _ = os.ReadFile("clash.png")
 	}
@@ -21,11 +22,11 @@ func onReady() {
 	systray.SetTitle("Mihomo")
 	systray.SetTooltip("Mihomo Proxy")
 
-	mOpen := systray.AddMenuItem("面板", "")
-	mQuit := systray.AddMenuItem("退出", "")
+	// 菜单
+	mOpen := systray.AddMenuItem("面板", "打开 Mihomo 面板")
+	mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
-	systray.SetOnClick(openDashboard)
-
+	// 点击菜单项
 	go func() {
 		for {
 			select {
@@ -44,11 +45,12 @@ func openDashboard() {
 }
 
 func onExit() {
+	// 退出时强制杀死 mihomo
 	exec.Command("taskkill", "/f", "/im", "mihomo.exe").Run()
 }
 
 func init() {
-	// 自动启动 mihomo（无窗口）
+	// 程序启动时自动运行 mihomo（完全隐藏窗口）
 	cmd := exec.Command("mihomo.exe", "-f", "config.yaml")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Start()
