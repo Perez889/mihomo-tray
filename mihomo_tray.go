@@ -2,12 +2,16 @@ package main
 
 import (
 	_ "embed"
+	"bytes"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +22,12 @@ import (
 var trayIcon []byte
 
 var mihomoCmd *exec.Cmd
+
+// ⭐ 如果你有 secret 填这里，没有就留空
+var mihomoSecret = ""
+
+// ⭐ API地址
+var apiURL = "http://127.0.0.1:9090"
 
 func main() {
 	systray.Run(onReady, onExit)
@@ -33,17 +43,43 @@ func onReady() {
 
 	systray.SetTooltip("Mihomo Proxy\n托盘管理小工具")
 
+	// ⭐ 系统代理开关
+	mSysProxy := systray.AddMenuItemCheckbox("代理", "开关系统代理", false)
+
 	mRestart := systray.AddMenuItem("重启", "重启 Mihomo")
 	mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
 	mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
+	// ⭐ 启动时同步系统代理状态
+	go func() {
+		time.Sleep(1 * time.Second)
+		if getSystemProxy() {
+			mSysProxy.Check()
+		}
+	}()
+
 	go func() {
 		for {
 			select {
+
+			// ⭐ 系统代理点击
+			case <-mSysProxy.ClickedCh:
+				newState := !mSysProxy.Checked()
+
+				if newState {
+					mSysProxy.Check()
+				} else {
+					mSysProxy.Uncheck()
+				}
+
+				setSystemProxy(newState)
+
 			case <-mRestart.ClickedCh:
 				restartMihomo()
+
 			case <-mOpen.ClickedCh:
 				openDashboard()
+
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -53,6 +89,56 @@ func onReady() {
 
 	// 启动 Mihomo
 	go startMihomo()
+}
+
+//
+// ⭐ 设置系统代理（核心）
+//
+func setSystemProxy(enable bool) {
+	json := []byte(fmt.Sprintf(`{"system_proxy": %v}`, enable))
+
+	req, _ := http.NewRequest(
+		"PUT",
+		apiURL+"/configs",
+		bytes.NewBuffer(json),
+	)
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// ⭐ 带认证
+	if mihomoSecret != "password" {
+		req.Header.Set("Authorization", "Bearer "+mihomoSecret)
+	}
+
+	_, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("系统代理设置失败:", err)
+		return
+	}
+
+	fmt.Println("系统代理:", enable)
+}
+
+//
+// ⭐ 获取当前系统代理状态
+//
+func getSystemProxy() bool {
+	req, _ := http.NewRequest("GET", apiURL+"/configs", nil)
+
+	if mihomoSecret != "" {
+		req.Header.Set("Authorization", "Bearer "+mihomoSecret)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	return strings.Contains(string(body), `"systemProxy":true`) ||
+		strings.Contains(string(body), `"system_proxy":true`)
 }
 
 //
@@ -110,20 +196,16 @@ func restartMihomo() {
 		mihomoCmd = nil
 	}
 
-	// ⭐ 等待 TUN / 端口释放
 	waitForRelease()
-
 	startMihomoForce()
 }
 
 //
-// ✅ 等待资源释放（TUN关键）
+// ✅ 等待资源释放
 //
 func waitForRelease() {
-	// 基础等待（必须）
 	time.Sleep(2 * time.Second)
 
-	// 检测端口是否还被占用
 	for i := 0; i < 6; i++ {
 		if !isPortOpen("127.0.0.1:9090") {
 			break
@@ -133,7 +215,7 @@ func waitForRelease() {
 }
 
 //
-// ✅ 纯 Go 检测端口（无闪屏）
+// ✅ 端口检测
 //
 func isPortOpen(addr string) bool {
 	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
@@ -159,7 +241,7 @@ func isRunning(cmd *exec.Cmd) bool {
 // ✅ 打开面板
 //
 func openDashboard() {
-	url := "http://127.0.0.1:9090/ui/zashboard"
+	url := apiURL + "/ui/zashboard"
 
 	switch runtime.GOOS {
 	case "darwin":
@@ -183,7 +265,7 @@ func onExit() {
 }
 
 //
-// ✅ 获取程序目录（便携核心）
+// ✅ 获取程序目录
 //
 func appDir() string {
 	exePath, err := os.Executable()
