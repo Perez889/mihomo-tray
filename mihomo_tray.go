@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,12 +51,12 @@ func onReady() {
 		}
 	}()
 
-	// 启动
+	// 启动 Mihomo
 	go startMihomo()
 }
 
 //
-// ✅ 启动（带运行检测）
+// ✅ 启动（带检测）
 //
 func startMihomo() {
 	if isRunning(mihomoCmd) {
@@ -66,7 +67,7 @@ func startMihomo() {
 }
 
 //
-// ✅ 强制启动（重启专用）
+// ✅ 强制启动（重启用）
 //
 func startMihomoForce() {
 	baseDir := appDir()
@@ -98,7 +99,7 @@ func startMihomoForce() {
 }
 
 //
-// ✅ 重启（已修复 TUN 问题）
+// ✅ 重启（已适配 TUN）
 //
 func restartMihomo() {
 	fmt.Println("正在重启 mihomo...")
@@ -109,22 +110,22 @@ func restartMihomo() {
 		mihomoCmd = nil
 	}
 
-	// ⭐ TUN 模式必须延迟（关键）
+	// ⭐ 等待 TUN / 端口释放
 	waitForRelease()
 
 	startMihomoForce()
 }
 
 //
-// ✅ 等待端口 / TUN 释放（核心优化）
+// ✅ 等待资源释放（TUN关键）
 //
 func waitForRelease() {
-	// 最少等待 2 秒（TUN 必须）
+	// 基础等待（必须）
 	time.Sleep(2 * time.Second)
 
-	// 再额外检测几轮（更稳）
-	for i := 0; i < 5; i++ {
-		if !isPortInUse("127.0.0.1:9090") {
+	// 检测端口是否还被占用
+	for i := 0; i < 6; i++ {
+		if !isPortOpen("127.0.0.1:9090") {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -132,15 +133,19 @@ func waitForRelease() {
 }
 
 //
-// ✅ 检测端口是否被占用
+// ✅ 纯 Go 检测端口（无闪屏）
 //
-func isPortInUse(addr string) bool {
-	conn, err := exec.Command("cmd", "/c", "netstat -ano | findstr "+addr).Output()
-	return err == nil && len(conn) > 0
+func isPortOpen(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 //
-// ✅ 判断进程是否真的在运行
+// ✅ 判断进程是否存活
 //
 func isRunning(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
