@@ -8,6 +8,7 @@ import (
     "path/filepath"
     "runtime"
     "syscall"
+    "time"
 
     "github.com/getlantern/systray"
 )
@@ -29,7 +30,7 @@ func onReady() {
         systray.SetTemplateIcon(trayIcon, trayIcon)
     }
 
-    systray.SetTooltip("Mihomo Proxy\n托盘管理工具")
+    systray.SetTooltip("Mihomo Proxy\n托盘管理小工具")
 
     mRestart := systray.AddMenuItem("重启", "重启 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
@@ -94,7 +95,13 @@ func restartMihomo() {
     if mihomoCmd != nil && mihomoCmd.Process != nil {
         mihomoCmd.Process.Kill()
         mihomoCmd.Wait()
+
+        // ⭐ 关键：清空句柄，否则 startMihomo() 会误判“已在运行”
+        mihomoCmd = nil
     }
+
+    // ⭐ 给系统一点时间释放端口（非常重要）
+    time.Sleep(500 * time.Millisecond)
 
     startMihomo()
 }
