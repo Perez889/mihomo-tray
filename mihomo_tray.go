@@ -29,17 +29,17 @@ func onReady() {
         systray.SetTemplateIcon(trayIcon, trayIcon)
     }
 
-    systray.SetTooltip("Mihomo Proxy\n托盘小工具")
+    systray.SetTooltip("Mihomo Proxy\n托盘管理工具")
 
-    mStart := systray.AddMenuItem("启动", "启动 Mihomo")
+    mRestart := systray.AddMenuItem("重启", "重启 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
     mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
     go func() {
         for {
             select {
-            case <-mStart.ClickedCh:
-                startMihomo()
+            case <-mRestart.ClickedCh:
+                restartMihomo()
             case <-mOpen.ClickedCh:
                 openDashboard()
             case <-mQuit.ClickedCh:
@@ -48,6 +48,9 @@ func onReady() {
             }
         }
     }()
+
+    // ⭐ 程序启动时自动启动 Mihomo
+    go startMihomo()
 }
 
 func startMihomo() {
@@ -64,11 +67,11 @@ func startMihomo() {
     }
 
     exePath := filepath.Join(baseDir, exeName)
-    configPath := filepath.Join(baseDir, "config.yaml")
 
-    cmd := exec.Command(exePath, "-f", configPath)
+    // ⭐ 等效 bat：cd /d %~dp0 && mihomo.exe -d .
+    cmd := exec.Command(exePath, "-d", ".")
+    cmd.Dir = baseDir
 
-    // Windows 隐藏窗口
     if runtime.GOOS == "windows" {
         cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
     }
@@ -83,6 +86,17 @@ func startMihomo() {
 
     mihomoCmd = cmd
     fmt.Println("mihomo 启动成功")
+}
+
+func restartMihomo() {
+    fmt.Println("正在重启 mihomo...")
+
+    if mihomoCmd != nil && mihomoCmd.Process != nil {
+        mihomoCmd.Process.Kill()
+        mihomoCmd.Wait()
+    }
+
+    startMihomo()
 }
 
 func openDashboard() {
@@ -104,10 +118,6 @@ func onExit() {
         mihomoCmd.Process.Kill()
         mihomoCmd.Wait()
     }
-}
-
-func init() {
-    go startMihomo()
 }
 
 func appDir() string {
