@@ -2,7 +2,9 @@ package main
 
 import (
     _ "embed"
+    "bytes"
     "fmt"
+    "net/http"
     "os"
     "os/exec"
     "path/filepath"
@@ -22,7 +24,7 @@ func main() {
 }
 
 func onReady() {
-    // 设置托盘图标
+    // 托盘图标
     if runtime.GOOS == "windows" {
         systray.SetIcon(trayIcon)
     } else {
@@ -31,8 +33,14 @@ func onReady() {
 
     systray.SetTooltip("Mihomo Proxy\n右键打开菜单")
 
+    // 菜单
     mStart := systray.AddMenuItem("启动", "启动 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
+
+    // 新增：系统代理 & TUN 开关
+    mSysProxy := systray.AddMenuItemCheckbox("代理", "开关系统代理", false)
+    mTun := systray.AddMenuItemCheckbox("TUN", "开关 TUN", false)
+
     mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
     go func() {
@@ -40,8 +48,20 @@ func onReady() {
             select {
             case <-mStart.ClickedCh:
                 startMihomo()
+
             case <-mOpen.ClickedCh:
                 openDashboard()
+
+            case <-mSysProxy.ClickedCh:
+                enabled := !mSysProxy.Checked()
+                mSysProxy.Check(enabled)
+                toggleSystemProxy(enabled)
+
+            case <-mTun.ClickedCh:
+                enabled := !mTun.Checked()
+                mTun.Check(enabled)
+                toggleTun(enabled)
+
             case <-mQuit.ClickedCh:
                 systray.Quit()
                 return
@@ -105,6 +125,34 @@ func onExit() {
         mihomoCmd.Wait()
     }
 }
+
+// ---------------------------
+// 🔥 Mihomo API 控制部分
+// ---------------------------
+
+// 系统代理开关
+func toggleSystemProxy(enable bool) {
+    url := "http://127.0.0.1:9090/system/"
+    if enable {
+        url += "enable"
+    } else {
+        url += "disable"
+    }
+    http.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
+}
+
+// TUN 开关
+func toggleTun(enable bool) {
+    url := "http://127.0.0.1:9090/tun/"
+    if enable {
+        url += "enable"
+    } else {
+        url += "disable"
+    }
+    http.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
+}
+
+// ---------------------------
 
 func init() {
     go startMihomo()
