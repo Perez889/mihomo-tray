@@ -37,7 +37,7 @@ func onReady() {
     mStart := systray.AddMenuItem("启动", "启动 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
 
-    // 新增：系统代理 & TUN 开关
+    // 新增：系统代理 & TUN 开关（默认未勾选）
     mSysProxy := systray.AddMenuItemCheckbox("代理", "开关系统代理", false)
     mTun := systray.AddMenuItemCheckbox("TUN", "开关 TUN", false)
 
@@ -53,14 +53,22 @@ func onReady() {
                 openDashboard()
 
             case <-mSysProxy.ClickedCh:
-                enabled := !mSysProxy.Checked()
-                mSysProxy.Check(enabled)
-                toggleSystemProxy(enabled)
+                if mSysProxy.Checked() {
+                    mSysProxy.Uncheck()
+                    toggleSystemProxy(false)
+                } else {
+                    mSysProxy.Check()
+                    toggleSystemProxy(true)
+                }
 
             case <-mTun.ClickedCh:
-                enabled := !mTun.Checked()
-                mTun.Check(enabled)
-                toggleTun(enabled)
+                if mTun.Checked() {
+                    mTun.Uncheck()
+                    toggleTun(false)
+                } else {
+                    mTun.Check()
+                    toggleTun(true)
+                }
 
             case <-mQuit.ClickedCh:
                 systray.Quit()
