@@ -19,12 +19,14 @@ var trayIcon []byte
 
 var mihomoCmd *exec.Cmd
 
+// 你的 secret（来自 config.yaml）
+const mihomoSecret = "password"
+
 func main() {
     systray.Run(onReady, onExit)
 }
 
 func onReady() {
-    // 托盘图标
     if runtime.GOOS == "windows" {
         systray.SetIcon(trayIcon)
     } else {
@@ -33,11 +35,9 @@ func onReady() {
 
     systray.SetTooltip("Mihomo Proxy\n右键打开菜单")
 
-    // 菜单
     mStart := systray.AddMenuItem("启动", "启动 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
 
-    // 新增：系统代理 & TUN 开关（默认未勾选）
     mSysProxy := systray.AddMenuItemCheckbox("代理", "开关系统代理", false)
     mTun := systray.AddMenuItemCheckbox("TUN", "开关 TUN", false)
 
@@ -96,7 +96,6 @@ func startMihomo() {
 
     cmd := exec.Command(exePath, "-f", configPath)
 
-    // Windows 隐藏窗口
     if runtime.GOOS == "windows" {
         cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
     }
@@ -135,10 +134,22 @@ func onExit() {
 }
 
 // ---------------------------
-// 🔥 Mihomo API 控制部分
+// 🔥 Mihomo API 控制部分（带 Authorization）
 // ---------------------------
 
-// 系统代理开关
+func apiPost(url string) {
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte("{}")))
+    req.Header.Set("Authorization", "Bearer "+mihomoSecret)
+    req.Header.Set("Content-Type", "application/json")
+
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        fmt.Println("API 调用失败:", err)
+        return
+    }
+    fmt.Println("API 返回:", resp.Status)
+}
+
 func toggleSystemProxy(enable bool) {
     url := "http://127.0.0.1:9090/system/"
     if enable {
@@ -146,10 +157,9 @@ func toggleSystemProxy(enable bool) {
     } else {
         url += "disable"
     }
-    http.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
+    apiPost(url)
 }
 
-// TUN 开关
 func toggleTun(enable bool) {
     url := "http://127.0.0.1:9090/tun/"
     if enable {
@@ -157,7 +167,7 @@ func toggleTun(enable bool) {
     } else {
         url += "disable"
     }
-    http.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
+    apiPost(url)
 }
 
 // ---------------------------
