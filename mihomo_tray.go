@@ -2,9 +2,7 @@ package main
 
 import (
     _ "embed"
-    "bytes"
     "fmt"
-    "net/http"
     "os"
     "os/exec"
     "path/filepath"
@@ -19,14 +17,12 @@ var trayIcon []byte
 
 var mihomoCmd *exec.Cmd
 
-// 你的 secret（来自 config.yaml）
-const mihomoSecret = "password"
-
 func main() {
     systray.Run(onReady, onExit)
 }
 
 func onReady() {
+    // 设置托盘图标
     if runtime.GOOS == "windows" {
         systray.SetIcon(trayIcon)
     } else {
@@ -35,41 +31,25 @@ func onReady() {
 
     systray.SetTooltip("Mihomo Proxy\n右键打开菜单")
 
+    // 菜单
     mStart := systray.AddMenuItem("启动", "启动 Mihomo")
     mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
-
-    mSysProxy := systray.AddMenuItemCheckbox("代理", "开关系统代理", false)
-    mTun := systray.AddMenuItemCheckbox("TUN", "开关 TUN", false)
-
+    mSysProxy := systray.AddMenuItem("代理", "启用/禁用系统代理")
+    mTun := systray.AddMenuItem("TUN", "启用/禁用虚拟网卡")
     mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
+    // 菜单事件处理
     go func() {
         for {
             select {
             case <-mStart.ClickedCh:
                 startMihomo()
-
             case <-mOpen.ClickedCh:
                 openDashboard()
-
             case <-mSysProxy.ClickedCh:
-                if mSysProxy.Checked() {
-                    mSysProxy.Uncheck()
-                    toggleSystemProxy(false)
-                } else {
-                    mSysProxy.Check()
-                    toggleSystemProxy(true)
-                }
-
+                toggleSystemProxy()
             case <-mTun.ClickedCh:
-                if mTun.Checked() {
-                    mTun.Uncheck()
-                    toggleTun(false)
-                } else {
-                    mTun.Check()
-                    toggleTun(true)
-                }
-
+                toggleVirtualTun()
             case <-mQuit.ClickedCh:
                 systray.Quit()
                 return
@@ -85,17 +65,16 @@ func startMihomo() {
     }
 
     baseDir := appDir()
-
     exeName := "mihomo"
     if runtime.GOOS == "windows" {
         exeName = "mihomo.exe"
     }
-
     exePath := filepath.Join(baseDir, exeName)
     configPath := filepath.Join(baseDir, "config.yaml")
 
     cmd := exec.Command(exePath, "-f", configPath)
 
+    // Windows 隐藏窗口
     if runtime.GOOS == "windows" {
         cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
     }
@@ -114,7 +93,6 @@ func startMihomo() {
 
 func openDashboard() {
     url := "http://127.0.0.1:9090/ui/zashboard"
-
     switch runtime.GOOS {
     case "darwin":
         exec.Command("open", url).Start()
@@ -125,6 +103,44 @@ func openDashboard() {
     }
 }
 
+func toggleSystemProxy() {
+    if runtime.GOOS != "windows" {
+        fmt.Println("系统代理功能仅在 Windows 支持")
+        return
+    }
+
+    // 简单示例：设置系统 HTTP 代理到 127.0.0.1:7890
+    cmd := exec.Command("netsh", "winhttp", "set", "proxy", "127.0.0.1:7890")
+    if err := cmd.Run(); err != nil {
+        fmt.Println("设置系统代理失败:", err)
+        return
+    }
+    fmt.Println("系统代理已启用")
+}
+
+func toggleVirtualTun() {
+    if runtime.GOOS != "windows" {
+        fmt.Println("虚拟网卡功能仅在 Windows 支持")
+        return
+    }
+
+    baseDir := appDir()
+    exeName := "mihomo"
+    if runtime.GOOS == "windows" {
+        exeName = "mihomo.exe"
+    }
+    exePath := filepath.Join(baseDir, exeName)
+
+    // 调用 mihomo tun 命令
+    cmd := exec.Command(exePath, "tun")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    if err := cmd.Run(); err != nil {
+        fmt.Println("虚拟网卡操作失败:", err)
+        return
+    }
+    fmt.Println("虚拟网卡操作完成")
+}
+
 func onExit() {
     if mihomoCmd != nil && mihomoCmd.Process != nil {
         fmt.Println("关闭 mihomo...")
@@ -132,45 +148,6 @@ func onExit() {
         mihomoCmd.Wait()
     }
 }
-
-// ---------------------------
-// 🔥 Mihomo API 控制部分（带 Authorization）
-// ---------------------------
-
-func apiPost(url string) {
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer([]byte("{}")))
-    req.Header.Set("Authorization", "Bearer "+mihomoSecret)
-    req.Header.Set("Content-Type", "application/json")
-
-    resp, err := http.DefaultClient.Do(req)
-    if err != nil {
-        fmt.Println("API 调用失败:", err)
-        return
-    }
-    fmt.Println("API 返回:", resp.Status)
-}
-
-func toggleSystemProxy(enable bool) {
-    url := "http://127.0.0.1:9090/system/"
-    if enable {
-        url += "enable"
-    } else {
-        url += "disable"
-    }
-    apiPost(url)
-}
-
-func toggleTun(enable bool) {
-    url := "http://127.0.0.1:9090/tun/"
-    if enable {
-        url += "enable"
-    } else {
-        url += "disable"
-    }
-    apiPost(url)
-}
-
-// ---------------------------
 
 func init() {
     go startMihomo()
