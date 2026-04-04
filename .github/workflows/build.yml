@@ -16,23 +16,37 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Initialize Go module
+      - name: Initialize Go module and install dependencies
         shell: pwsh
         run: |
           if (-Not (Test-Path go.mod)) {
               go mod init mihomo_tray
           }
+          
+          # 添加项目需要的依赖
+          go get github.com/getlantern/systray
+          go get gopkg.in/yaml.v3
+          
+          # 清理并下载依赖
           go mod tidy
 
-      - name: Install rsrc
+      - name: Install rsrc (用于嵌入 ico 到 exe)
         run: go install github.com/akavel/rsrc@latest
 
-      - name: Generate 64bit app.syso
+      - name: Generate 64bit app.syso (嵌入 clash.ico)
         run: rsrc -arch amd64 -ico clash.ico -o app.syso
 
-      - name: Build Windows EXE (build module, not single file)
+      - name: Build Windows EXE (极致优化)
         run: |
-          go build -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe .
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe .
+
+      - name: Compress with UPX (进一步大幅减小体积)
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          version: latest
+          files: |
+            mihomo_tray.exe
+          args: --best --lzma
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
