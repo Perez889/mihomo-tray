@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
+	"gopkg.in/yaml.v3" // 需要执行: go get gopkg.in/yaml.v3
 )
 
 //go:embed clash.ico
@@ -19,21 +22,58 @@ var trayIcon []byte
 
 var mihomoCmd *exec.Cmd
 
-// 全局状态：false = 关闭，true = 开启
+// 全局状态
 var isSystemProxyEnabled bool = false
+var currentMixedPort string = "1081" // 默认值，会被 config.yaml 覆盖
 
 const (
-	MIXED_PORT   = "127.0.0.1:1081"
 	CONTROLLER   = "127.0.0.1:9090"
 	DASHBOARD_URL = "http://127.0.0.1:9090/ui/zashboard"
 )
 
 func main() {
+	loadMixedPortFromConfig() // 启动时读取 config.yaml 中的 mixed-port
 	systray.Run(onReady, onExit)
 }
 
+// 从 config.yaml 读取 mixed-port（优先使用 mixed-port，其次 socks-port / port）
+func loadMixedPortFromConfig() {
+	baseDir := appDir()
+	configPath := filepath.Join(baseDir, "config.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Println("警告：无法读取 config.yaml，使用默认端口 1081")
+		return
+	}
+
+	var config map[string]interface{}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		fmt.Println("警告：解析 config.yaml 失败，使用默认端口 1081")
+		return
+	}
+
+	// 优先级：mixed-port > socks-port > port
+	if port, ok := config["mixed-port"]; ok {
+		if p, ok := port.(int); ok {
+			currentMixedPort = strconv.Itoa(p)
+		} else if p, ok := port.(string); ok {
+			currentMixedPort = strings.TrimSpace(p)
+		}
+	} else if port, ok := config["socks-port"]; ok {
+		if p, ok := port.(int); ok {
+			currentMixedPort = strconv.Itoa(p)
+		}
+	} else if port, ok := config["port"]; ok {
+		if p, ok := port.(int); ok {
+			currentMixedPort = strconv.Itoa(p)
+		}
+	}
+
+	fmt.Println("当前系统代理端口（来自 config.yaml）:", currentMixedPort)
+}
+
 func onReady() {
-	// 托盘图标
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(trayIcon)
 	} else {
@@ -41,18 +81,16 @@ func onReady() {
 	}
 	systray.SetTooltip("Mihomo Proxy\n托盘管理小工具")
 
-	// 菜单
 	mRestart := systray.AddMenuItem("重启", "重启 Mihomo 核心")
 	mOpen := systray.AddMenuItem("面板", "打开 Zashboard 面板")
 	systray.AddSeparator()
 
-	// 系统代理 - 使用 Checkbox（勾选即开启）
-	mProxy := systray.AddMenuItemCheckbox("代理", "开启/关闭系统代理 (1081)", false)
-
+	// Checkbox 菜单，动态显示端口
+	mProxy := systray.AddMenuItemCheckbox("代理", fmt.Sprintf("开启/关闭系统代理 (%s)", currentMixedPort), false)
 	systray.AddSeparator()
+
 	mQuit := systray.AddMenuItem("退出", "退出程序并关闭 mihomo")
 
-	// 初始化勾选状态
 	updateProxyMenu(mProxy)
 
 	go func() {
@@ -71,59 +109,60 @@ func onReady() {
 		}
 	}()
 
-	// 启动 Mihomo
 	go startMihomo()
 }
 
-// 更新 Checkbox 状态
+// 更新 Checkbox 状态和标题
 func updateProxyMenu(m *systray.MenuItem) {
+	title := fmt.Sprintf("代理 (%s)", currentMixedPort)
 	if isSystemProxyEnabled {
 		m.Check()
-		m.SetTitle("系统代理 (已开启)")
+		m.SetTitle(title + " 已开启")
 	} else {
 		m.Uncheck()
-		m.SetTitle("系统代理 (已关闭)")
+		m.SetTitle(title + " 已关闭")
 	}
 }
 
-// ==================== 系统代理开关（Checkbox + 无闪窗）===================
+// ==================== 系统代理开关（使用实际端口）===================
 func toggleSystemProxy(m *systray.MenuItem) {
 	isSystemProxyEnabled = !isSystemProxyEnabled
 
+	proxyAddr := "127.0.0.1:" + currentMixedPort
+
 	if isSystemProxyEnabled {
-		enableSystemProxy()
+		enableSystemProxy(proxyAddr)
 	} else {
 		disableSystemProxy()
 	}
-
 	updateProxyMenu(m)
 }
 
-func enableSystemProxy() {
-	fmt.Println("开启系统代理 →", MIXED_PORT)
+func enableSystemProxy(proxyAddr string) {
+	fmt.Println("开启系统代理 →", proxyAddr)
 
 	switch runtime.GOOS {
 	case "windows":
 		cmd := exec.Command("powershell", "-Command",
-			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyServer -Value "`+MIXED_PORT+`"; `+
+			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyServer -Value "`+proxyAddr+`"; `+
 				`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 1`)
 		hideWindow(cmd)
 		_ = cmd.Run()
 	case "darwin":
-		exec.Command("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1081").Start()
-		exec.Command("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", "1081").Start()
-		exec.Command("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", "1081").Start()
+		port := currentMixedPort
+		exec.Command("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", port).Start()
+		exec.Command("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", port).Start()
+		exec.Command("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", port).Start()
 	default:
-		// Linux GNOME 示例
+		port := currentMixedPort
 		exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual").Run()
 		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "host", "127.0.0.1").Run()
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", "1081").Run()
+		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", port).Run()
 	}
 }
 
 func disableSystemProxy() {
 	fmt.Println("关闭系统代理")
-
 	switch runtime.GOOS {
 	case "windows":
 		cmd := exec.Command("powershell", "-Command",
@@ -139,17 +178,16 @@ func disableSystemProxy() {
 	}
 }
 
-// 隐藏 Windows 子命令窗口（解决闪屏关键）
 func hideWindow(cmd *exec.Cmd) {
 	if runtime.GOOS == "windows" && cmd != nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
-			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+			CreationFlags: 0x08000000,
 		}
 	}
 }
 
-// ==================== Mihomo 核心控制（已优化）===================
+// ==================== 下面函数基本不变（已优化）===================
 func startMihomo() {
 	if isRunning(mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
@@ -168,7 +206,7 @@ func startMihomoForce() {
 
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
-	hideWindow(cmd) // 隐藏 mihomo 自身窗口
+	hideWindow(cmd)
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -195,7 +233,7 @@ func restartMihomo() {
 func waitForRelease() {
 	time.Sleep(2 * time.Second)
 	for i := 0; i < 10; i++ {
-		if !isPortOpen(CONTROLLER) && !isPortOpen(MIXED_PORT) {
+		if !isPortOpen(CONTROLLER) && !isPortOpen("127.0.0.1:"+currentMixedPort) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -239,7 +277,7 @@ func onExit() {
 		_ = mihomoCmd.Process.Kill()
 		_, _ = mihomoCmd.Process.Wait()
 	}
-	disableSystemProxy() // 退出时自动关闭系统代理
+	disableSystemProxy()
 }
 
 func appDir() string {
