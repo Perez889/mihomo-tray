@@ -1,6 +1,20 @@
 name: Build Mihomo Tray
 
 on:
+  # 手动触发（推荐方式）
+  workflow_dispatch:
+    inputs:
+      compression_level:
+        description: 'UPX 压缩等级'
+        required: false
+        default: 'ultra-brute'
+        type: choice
+        options:
+          - ultra-brute
+          - best
+          - normal
+
+  # 可选：只有 push 到 main/master 时才自动构建（如果你以后需要）
   push:
     branches: [ main, master ]
 
@@ -16,21 +30,16 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Initialize Go module and install dependencies
+      - name: Initialize Go module
         shell: pwsh
         run: |
           if (-Not (Test-Path go.mod)) {
               go mod init mihomo_tray
           }
-          
-          # 添加项目需要的依赖
           go get github.com/getlantern/systray
-          go get gopkg.in/yaml.v3
-          
-          # 清理并下载依赖
           go mod tidy
 
-      - name: Install rsrc (用于嵌入 ico 到 exe)
+      - name: Install rsrc (用于嵌入图标)
         run: go install github.com/akavel/rsrc@latest
 
       - name: Generate 64bit app.syso (嵌入 clash.ico)
@@ -40,13 +49,13 @@ jobs:
         run: |
           go build -trimpath -ldflags "-H=windowsgui -s -w" -o mihomo_tray.exe .
 
-      - name: Compress with UPX (进一步大幅减小体积)
+      - name: Compress with UPX
         uses: crazy-max/ghaction-upx@v3
         with:
           version: latest
           files: |
             mihomo_tray.exe
-          args: --best --lzma
+          args: --${{ inputs.compression_level || 'ultra-brute' }} --lzma
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
