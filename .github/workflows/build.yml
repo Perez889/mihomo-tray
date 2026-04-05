@@ -1,7 +1,7 @@
 name: Build Mihomo Tray
 
 on:
-  # 手动触发（推荐方式）
+  # 手动触发（推荐使用）
   workflow_dispatch:
     inputs:
       compression_level:
@@ -14,7 +14,7 @@ on:
           - best
           - normal
 
-  # 可选：只有 push 到 main/master 时才自动构建（如果你以后需要）
+  # 可选：push 到 main/master 时自动构建
   push:
     branches: [ main, master ]
 
@@ -30,13 +30,18 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Initialize Go module
+      - name: Initialize Go module and install dependencies
         shell: pwsh
         run: |
           if (-Not (Test-Path go.mod)) {
               go mod init mihomo_tray
           }
+          
+          # 添加需要的依赖
           go get github.com/getlantern/systray
+          go get gopkg.in/yaml.v3     # 用于自动读取 config.yaml 中的端口
+          
+          # 清理并下载依赖
           go mod tidy
 
       - name: Install rsrc (用于嵌入图标)
