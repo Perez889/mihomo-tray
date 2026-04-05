@@ -100,6 +100,7 @@ func (a *App) onReady() {
 	systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具", Version))
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
+	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard")
 	systray.AddSeparator()
 
