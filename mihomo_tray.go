@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ==================== 版本号（打包时通过 -ldflags 注入） ====================
+// ==================== 版本号 ====================
 var Version = "dev"
 
 //go:embed clash.ico
@@ -33,7 +33,6 @@ type App struct {
 	dashboardURL        string
 }
 
-// NewApp 创建应用实例并加载配置
 func NewApp() *App {
 	app := &App{
 		isSystemProxyEnabled: false,
@@ -41,7 +40,6 @@ func NewApp() *App {
 		controllerAddr:      "127.0.0.1:9090",
 		secret:              "password",
 	}
-
 	app.loadConfig()
 	return app
 }
@@ -65,7 +63,6 @@ func (a *App) loadConfig() {
 		return
 	}
 
-	// mixed-port
 	if p, ok := cfg["mixed-port"]; ok {
 		if port, ok := p.(int); ok {
 			a.mixedPort = strconv.Itoa(port)
@@ -74,21 +71,18 @@ func (a *App) loadConfig() {
 		}
 	}
 
-	// external-controller
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
 			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
-	// secret
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok && secretStr != "" {
 			a.secret = secretStr
 		}
 	}
 
-	// 生成面板地址
 	a.dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", a.controllerAddr, a.secret)
 
 	fmt.Printf("配置加载成功 → 系统代理端口: %s | 控制器: %s | Secret: %s\n",
@@ -150,10 +144,10 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 
 	if a.isSystemProxyEnabled {
 		a.enableSystemProxy(proxyAddr)
-		systray.ShowNotification("系统代理", "已开启 ("+a.mixedPort+")")
+		fmt.Println("系统代理已开启")
 	} else {
 		a.disableSystemProxy()
-		systray.ShowNotification("系统代理", "已关闭")
+		fmt.Println("系统代理已关闭")
 	}
 
 	a.updateProxyMenu(m)
@@ -230,13 +224,11 @@ func (a *App) startMihomoForce() {
 
 	if err := cmd.Start(); err != nil {
 		fmt.Println("启动失败:", err)
-		systray.ShowNotification("启动失败", "请检查 mihomo 是否存在")
 		return
 	}
 
 	a.mihomoCmd = cmd
 	fmt.Println("mihomo 启动成功")
-	systray.ShowNotification("Mihomo", "启动成功")
 }
 
 func (a *App) restartMihomo() {
