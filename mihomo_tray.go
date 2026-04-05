@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ==================== 版本号（打包时会自动替换） ====================
+// ==================== 版本号 ====================
 var Version = "dev"
 
 //go:embed clash.ico
@@ -28,7 +28,7 @@ var mihomoCmd *exec.Cmd
 // 全局状态
 var isSystemProxyEnabled bool = false
 var currentMixedPort string = "1081"
-var controllerAddr string = "127.0.0.1:9090"   // 完整地址，如 127.0.0.1:9090
+var controllerAddr string = "127.0.0.1:9090"
 var secret string = "password"
 var dashboardURL string
 
@@ -37,26 +37,23 @@ func main() {
 	systray.Run(onReady, onExit)
 }
 
-// ==================== 自动读取 config.yaml（完整版） ====================
+// ==================== 自动读取 config.yaml ====================
 func loadConfigFromYAML() {
 	baseDir := appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		fmt.Println("警告：无法读取 config.yaml，使用默认值")
-		dashboardURL = "http://127.0.0.1:9090/ui/zashboard?secret=password"
+		fmt.Println("警告：无法读取 config.yaml")
 		return
 	}
 
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		fmt.Println("警告：解析 config.yaml 失败")
-		dashboardURL = "http://127.0.0.1:9090/ui/zashboard?secret=password"
 		return
 	}
 
-	// 1. 读取 mixed-port（系统代理端口）
 	if p, ok := cfg["mixed-port"]; ok {
 		if port, ok := p.(int); ok {
 			currentMixedPort = strconv.Itoa(port)
@@ -65,28 +62,21 @@ func loadConfigFromYAML() {
 		}
 	}
 
-	// 2. 读取 external-controller（完整 IP:端口）
 	if ctrl, ok := cfg["external-controller"]; ok {
-		if ctrlStr, ok := ctrl.(string); ok {
-			ctrlStr = strings.TrimSpace(ctrlStr)
-			if ctrlStr != "" {
-				controllerAddr = ctrlStr
-			}
+		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
+			controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
-	// 3. 读取 secret
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok && secretStr != "" {
 			secret = secretStr
 		}
 	}
 
-	// 4. 生成完整的面板 URL
 	dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", controllerAddr, secret)
 
-	fmt.Printf("自动识别成功 → 系统代理端口: %s | 控制器地址: %s | Secret: %s\n",
-		currentMixedPort, controllerAddr, secret)
+	fmt.Printf("自动识别成功 → 系统代理端口: %s | 控制器: %s\n", currentMixedPort, controllerAddr)
 }
 
 func onReady() {
@@ -98,20 +88,27 @@ func onReady() {
 
 	systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具", Version))
 
+	// ==================== 顶部状态栏（灰色，不可点击） ====================
+	mStatus := systray.AddMenuItem("代理状态\noff[1081]", "")
+	mStatus.Disable()
+
+	// 只在状态栏下方加一条分割线
+	systray.AddSeparator()
+
+	// 功能菜单
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard 面板")
 	systray.AddSeparator()
 
-	mProxy := systray.AddMenuItemCheckbox(
-		fmt.Sprintf("系统代理 (%s)", currentMixedPort),
-		"开启/关闭系统代理",
-		false,
-	)
+	// 系统代理 Checkbox（干净显示）
+	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("退出程序", "退出程序并关闭 mihomo")
 
-	updateProxyMenu(mProxy)
+	// 退出
+	mQuit := systray.AddMenuItem("退出程序", "退出并关闭 mihomo")
+
+	updateStatus(mStatus, mProxy)
 
 	go func() {
 		for {
@@ -121,7 +118,7 @@ func onReady() {
 			case <-mOpen.ClickedCh:
 				openDashboard()
 			case <-mProxy.ClickedCh:
-				toggleSystemProxy(mProxy)
+				toggleSystemProxy(mStatus, mProxy)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -132,21 +129,25 @@ func onReady() {
 	go startMihomo()
 }
 
-// 更新 Checkbox 状态
-func updateProxyMenu(m *systray.MenuItem) {
-	title := fmt.Sprintf("系统代理 (%s)", currentMixedPort)
+// 更新状态栏（off / on）
+func updateStatus(status *systray.MenuItem, proxy *systray.MenuItem) {
+	state := "off"
 	if isSystemProxyEnabled {
-		m.Check()
-		m.SetTitle(title + " 已开启")
+		state = "on"
+	}
+	status.SetTitle(fmt.Sprintf("代理状态\n%s[%s]", state, currentMixedPort))
+
+	if isSystemProxyEnabled {
+		proxy.Check()
 	} else {
-		m.Uncheck()
-		m.SetTitle(title + " 已关闭")
+		proxy.Uncheck()
 	}
 }
 
 // ==================== 系统代理开关 ====================
-func toggleSystemProxy(m *systray.MenuItem) {
+func toggleSystemProxy(status *systray.MenuItem, proxy *systray.MenuItem) {
 	isSystemProxyEnabled = !isSystemProxyEnabled
+
 	proxyAddr := "127.0.0.1:" + currentMixedPort
 
 	if isSystemProxyEnabled {
@@ -154,7 +155,8 @@ func toggleSystemProxy(m *systray.MenuItem) {
 	} else {
 		disableSystemProxy()
 	}
-	updateProxyMenu(m)
+
+	updateStatus(status, proxy)
 }
 
 func enableSystemProxy(proxyAddr string) {
@@ -203,7 +205,7 @@ func hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== Mihomo 核心控制 ====================
+// ==================== 核心功能 ====================
 func startMihomo() {
 	if isRunning(mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
