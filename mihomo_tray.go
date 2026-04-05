@@ -100,8 +100,11 @@ func (a *App) onReady() {
 	systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具", Version))
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
+	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard")
+	systray.AddSeparator()
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
+	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
 	a.updateProxyMenu(mProxy)
