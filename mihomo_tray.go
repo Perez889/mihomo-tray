@@ -12,8 +12,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/getlantern/systray"
+	"golang.org/x/sys/windows"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,22 +25,50 @@ var Version = "dev"
 //go:embed clash.ico
 var trayIcon []byte
 
+// ==================== 单实例控制 ====================
+var (
+	kernel32         = windows.NewLazySystemDLL("kernel32.dll")
+	procCreateMutex  = kernel32.NewProc("CreateMutexW")
+	procGetLastError = kernel32.NewProc("GetLastError")
+)
+
+func ensureSingleInstance() {
+	name, _ := windows.UTF16PtrFromString("Global\\MihomoTraySingleton")
+
+	handle, _, _ := procCreateMutex.Call(
+		0,
+		1,
+		uintptr(unsafe.Pointer(name)),
+	)
+
+	lastErr, _, _ := procGetLastError.Call()
+
+	const ERROR_ALREADY_EXISTS = 183
+
+	if lastErr == ERROR_ALREADY_EXISTS {
+		fmt.Println("程序已经在运行")
+		os.Exit(0)
+	}
+
+	_ = handle
+}
+
 // ==================== 主应用结构体 ====================
 type App struct {
-	mihomoCmd           *exec.Cmd
+	mihomoCmd            *exec.Cmd
 	isSystemProxyEnabled bool
-	mixedPort           string
-	controllerAddr      string
-	secret              string
-	dashboardURL        string
+	mixedPort            string
+	controllerAddr       string
+	secret               string
+	dashboardURL         string
 }
 
 func NewApp() *App {
 	app := &App{
 		isSystemProxyEnabled: false,
-		mixedPort:           "1081",
-		controllerAddr:      "127.0.0.1:9090",
-		secret:              "password",
+		mixedPort:            "1081",
+		controllerAddr:       "127.0.0.1:9090",
+		secret:               "password",
 	}
 	app.loadConfig()
 	return app
@@ -204,6 +234,13 @@ func (a *App) startMihomo() {
 		fmt.Println("mihomo 已在运行")
 		return
 	}
+
+	//  新增：端口检测，防重复启动
+	if a.isPortOpen("127.0.0.1:" + a.mixedPort) {
+		fmt.Println("检测到端口已占用，跳过启动 mihomo")
+		return
+	}
+
 	a.startMihomoForce()
 }
 
@@ -301,6 +338,8 @@ func (a *App) appDir() string {
 
 // ==================== 主入口 ====================
 func main() {
+	ensureSingleInstance() //  防多开
+
 	app := NewApp()
 	systray.Run(app.onReady, app.onExit)
 }
