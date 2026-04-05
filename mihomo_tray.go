@@ -17,69 +17,86 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ==================== 版本号 ====================
+// ==================== 版本号（打包时通过 -ldflags 注入） ====================
 var Version = "dev"
 
 //go:embed clash.ico
 var trayIcon []byte
 
-var mihomoCmd *exec.Cmd
-
-// 全局状态
-var isSystemProxyEnabled bool = false
-var currentMixedPort string = "1081"
-var controllerAddr string = "127.0.0.1:9090"
-var secret string = "password"
-var dashboardURL string
-
-func main() {
-	loadConfigFromYAML()
-	systray.Run(onReady, onExit)
+// ==================== 主应用结构体 ====================
+type App struct {
+	mihomoCmd           *exec.Cmd
+	isSystemProxyEnabled bool
+	mixedPort           string
+	controllerAddr      string
+	secret              string
+	dashboardURL        string
 }
 
-// ==================== 自动读取 config.yaml ====================
-func loadConfigFromYAML() {
-	baseDir := appDir()
+// NewApp 创建应用实例并加载配置
+func NewApp() *App {
+	app := &App{
+		isSystemProxyEnabled: false,
+		mixedPort:           "1081",
+		controllerAddr:      "127.0.0.1:9090",
+		secret:              "password",
+	}
+
+	app.loadConfig()
+	return app
+}
+
+// ==================== 配置加载 ====================
+func (a *App) loadConfig() {
+	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		fmt.Println("警告：无法读取 config.yaml")
+		fmt.Println("警告：无法读取 config.yaml，使用默认值")
+		a.dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", a.controllerAddr, a.secret)
 		return
 	}
 
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		fmt.Println("警告：解析 config.yaml 失败")
+		fmt.Println("警告：解析 config.yaml 失败，使用默认值")
+		a.dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", a.controllerAddr, a.secret)
 		return
 	}
 
+	// mixed-port
 	if p, ok := cfg["mixed-port"]; ok {
 		if port, ok := p.(int); ok {
-			currentMixedPort = strconv.Itoa(port)
+			a.mixedPort = strconv.Itoa(port)
 		} else if portStr, ok := p.(string); ok {
-			currentMixedPort = strings.TrimSpace(portStr)
+			a.mixedPort = strings.TrimSpace(portStr)
 		}
 	}
 
+	// external-controller
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
-			controllerAddr = strings.TrimSpace(ctrlStr)
+			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
+	// secret
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok && secretStr != "" {
-			secret = secretStr
+			a.secret = secretStr
 		}
 	}
 
-	dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", controllerAddr, secret)
+	// 生成面板地址
+	a.dashboardURL = fmt.Sprintf("http://%s/ui/zashboard?secret=%s", a.controllerAddr, a.secret)
 
-	fmt.Printf("自动识别成功 → 系统代理端口: %s | 控制器: %s\n", currentMixedPort, controllerAddr)
+	fmt.Printf("配置加载成功 → 系统代理端口: %s | 控制器: %s | Secret: %s\n",
+		a.mixedPort, a.controllerAddr, a.secret)
 }
 
-func onReady() {
+// ==================== UI 初始化 ====================
+func (a *App) onReady() {
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(trayIcon)
 	} else {
@@ -88,37 +105,26 @@ func onReady() {
 
 	systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具", Version))
 
-	// ==================== 顶部状态栏（灰色，不可点击） ====================
-	mStatus := systray.AddMenuItem("代理关闭\n【1081】", "")
-	mStatus.Disable()
-
-	systray.AddSeparator()
-
-	// 功能菜单
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
-    systray.AddSeparator()
 	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard")
 	systray.AddSeparator()
 
-	// 系统代理 Checkbox
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 
 	systray.AddSeparator()
-
-	// 退出
 	mQuit := systray.AddMenuItem("退出程序", "退出并关闭 mihomo")
 
-	updateStatus(mStatus, mProxy)
+	a.updateProxyMenu(mProxy)
 
 	go func() {
 		for {
 			select {
 			case <-mRestart.ClickedCh:
-				restartMihomo()
+				a.restartMihomo()
 			case <-mOpen.ClickedCh:
-				openDashboard()
+				a.openDashboard()
 			case <-mProxy.ClickedCh:
-				toggleSystemProxy(mStatus, mProxy)
+				a.toggleSystemProxy(mProxy)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -126,66 +132,60 @@ func onReady() {
 		}
 	}()
 
-	go startMihomo()
+	go a.startMihomo()
 }
 
-// 更新顶部状态栏（代理开启 / 代理关闭）
-func updateStatus(status *systray.MenuItem, proxy *systray.MenuItem) {
-	state := "代理关闭"
-	if isSystemProxyEnabled {
-		state = "代理开启"
-	}
-	status.SetTitle(fmt.Sprintf("%s\n[%s]", state, currentMixedPort))
-
-	if isSystemProxyEnabled {
-		proxy.Check()
+func (a *App) updateProxyMenu(m *systray.MenuItem) {
+	if a.isSystemProxyEnabled {
+		m.Check()
 	} else {
-		proxy.Uncheck()
+		m.Uncheck()
 	}
 }
 
 // ==================== 系统代理开关 ====================
-func toggleSystemProxy(status *systray.MenuItem, proxy *systray.MenuItem) {
-	isSystemProxyEnabled = !isSystemProxyEnabled
+func (a *App) toggleSystemProxy(m *systray.MenuItem) {
+	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
+	proxyAddr := "127.0.0.1:" + a.mixedPort
 
-	proxyAddr := "127.0.0.1:" + currentMixedPort
-
-	if isSystemProxyEnabled {
-		enableSystemProxy(proxyAddr)
+	if a.isSystemProxyEnabled {
+		a.enableSystemProxy(proxyAddr)
+		systray.ShowNotification("系统代理", "已开启 ("+a.mixedPort+")")
 	} else {
-		disableSystemProxy()
+		a.disableSystemProxy()
+		systray.ShowNotification("系统代理", "已关闭")
 	}
 
-	updateStatus(status, proxy)
+	a.updateProxyMenu(m)
 }
 
-func enableSystemProxy(proxyAddr string) {
+func (a *App) enableSystemProxy(proxyAddr string) {
 	fmt.Println("开启系统代理 →", proxyAddr)
 	switch runtime.GOOS {
 	case "windows":
 		cmd := exec.Command("powershell", "-Command",
 			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyServer -Value "`+proxyAddr+`"; `+
 				`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 1`)
-		hideWindow(cmd)
+		a.hideWindow(cmd)
 		_ = cmd.Run()
 	case "darwin":
-		exec.Command("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", currentMixedPort).Start()
-		exec.Command("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", currentMixedPort).Start()
-		exec.Command("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", currentMixedPort).Start()
+		exec.Command("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
+		exec.Command("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
+		exec.Command("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
 	default:
 		exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual").Run()
 		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "host", "127.0.0.1").Run()
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", currentMixedPort).Run()
+		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", a.mixedPort).Run()
 	}
 }
 
-func disableSystemProxy() {
+func (a *App) disableSystemProxy() {
 	fmt.Println("关闭系统代理")
 	switch runtime.GOOS {
 	case "windows":
 		cmd := exec.Command("powershell", "-Command",
 			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
-		hideWindow(cmd)
+		a.hideWindow(cmd)
 		_ = cmd.Run()
 	case "darwin":
 		exec.Command("networksetup", "-setwebproxystate", "Wi-Fi", "off").Start()
@@ -196,7 +196,7 @@ func disableSystemProxy() {
 	}
 }
 
-func hideWindow(cmd *exec.Cmd) {
+func (a *App) hideWindow(cmd *exec.Cmd) {
 	if runtime.GOOS == "windows" && cmd != nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
@@ -205,57 +205,62 @@ func hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== 核心功能 ====================
-func startMihomo() {
-	if isRunning(mihomoCmd) {
+// ==================== Mihomo 核心控制 ====================
+func (a *App) startMihomo() {
+	if a.isRunning(a.mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
 		return
 	}
-	startMihomoForce()
+	a.startMihomoForce()
 }
 
-func startMihomoForce() {
-	baseDir := appDir()
+func (a *App) startMihomoForce() {
+	baseDir := a.appDir()
 	exeName := "mihomo"
 	if runtime.GOOS == "windows" {
 		exeName = "mihomo.exe"
 	}
 	exePath := filepath.Join(baseDir, exeName)
+
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
-	hideWindow(cmd)
+	a.hideWindow(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Start(); err != nil {
 		fmt.Println("启动失败:", err)
+		systray.ShowNotification("启动失败", "请检查 mihomo 是否存在")
 		return
 	}
-	mihomoCmd = cmd
+
+	a.mihomoCmd = cmd
 	fmt.Println("mihomo 启动成功")
+	systray.ShowNotification("Mihomo", "启动成功")
 }
 
-func restartMihomo() {
+func (a *App) restartMihomo() {
 	fmt.Println("正在重启 mihomo...")
-	if mihomoCmd != nil && mihomoCmd.Process != nil {
-		_ = mihomoCmd.Process.Kill()
-		_, _ = mihomoCmd.Process.Wait()
-		mihomoCmd = nil
+	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
+		_ = a.mihomoCmd.Process.Kill()
+		_, _ = a.mihomoCmd.Process.Wait()
+		a.mihomoCmd = nil
 	}
-	waitForRelease()
-	startMihomoForce()
+	a.waitForRelease()
+	a.startMihomoForce()
 }
 
-func waitForRelease() {
+func (a *App) waitForRelease() {
 	time.Sleep(2 * time.Second)
 	for i := 0; i < 8; i++ {
-		if !isPortOpen(controllerAddr) && !isPortOpen("127.0.0.1:"+currentMixedPort) {
+		if !a.isPortOpen(a.controllerAddr) && !a.isPortOpen("127.0.0.1:"+a.mixedPort) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-func isPortOpen(addr string) bool {
+func (a *App) isPortOpen(addr string) bool {
 	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {
 		return false
@@ -264,7 +269,7 @@ func isPortOpen(addr string) bool {
 	return true
 }
 
-func isRunning(cmd *exec.Cmd) bool {
+func (a *App) isRunning(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
 		return false
 	}
@@ -272,33 +277,39 @@ func isRunning(cmd *exec.Cmd) bool {
 	return err == nil
 }
 
-func openDashboard() {
+func (a *App) openDashboard() {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", dashboardURL)
+		cmd = exec.Command("open", a.dashboardURL)
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", dashboardURL)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", a.dashboardURL)
 	default:
-		cmd = exec.Command("xdg-open", dashboardURL)
+		cmd = exec.Command("xdg-open", a.dashboardURL)
 	}
-	hideWindow(cmd)
+	a.hideWindow(cmd)
 	cmd.Start()
 }
 
-func onExit() {
-	if mihomoCmd != nil && mihomoCmd.Process != nil {
+func (a *App) onExit() {
+	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
 		fmt.Println("关闭 mihomo...")
-		_ = mihomoCmd.Process.Kill()
-		_, _ = mihomoCmd.Process.Wait()
+		_ = a.mihomoCmd.Process.Kill()
+		_, _ = a.mihomoCmd.Process.Wait()
 	}
-	disableSystemProxy()
+	a.disableSystemProxy()
 }
 
-func appDir() string {
+func (a *App) appDir() string {
 	exePath, err := os.Executable()
 	if err != nil {
 		return "."
 	}
 	return filepath.Dir(exePath)
+}
+
+// ==================== 主入口 ====================
+func main() {
+	app := NewApp()
+	systray.Run(app.onReady, app.onExit)
 }
