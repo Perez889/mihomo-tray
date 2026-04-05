@@ -118,7 +118,7 @@ func (a *App) onReady() {
         systray.SetTemplateIcon(trayIcon, trayIcon)
     }
 
-    systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具"))
+    systray.SetTooltip(fmt.Sprintf("Mihomo Proxy\n托盘管理小工具"))
 
     mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
     systray.AddSeparator()
