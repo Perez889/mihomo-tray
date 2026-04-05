@@ -89,18 +89,18 @@ func onReady() {
 	systray.SetTooltip(fmt.Sprintf("Mihomo Proxy %s\n托盘管理小工具", Version))
 
 	// ==================== 顶部状态栏（灰色，不可点击） ====================
-	mStatus := systray.AddMenuItem("代理状态\noff[1081]", "")
+	mStatus := systray.AddMenuItem("代理关闭\n【1081】", "")
 	mStatus.Disable()
 
-	// 只在状态栏下方加一条分割线
 	systray.AddSeparator()
 
 	// 功能菜单
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
-	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard 面板")
+    systray.AddSeparator()
+	mOpen := systray.AddMenuItem("面板管理", "打开 Zashboard")
 	systray.AddSeparator()
 
-	// 系统代理 Checkbox（干净显示）
+	// 系统代理 Checkbox
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 
 	systray.AddSeparator()
@@ -129,13 +129,13 @@ func onReady() {
 	go startMihomo()
 }
 
-// 更新状态栏（off / on）
+// 更新顶部状态栏（代理开启 / 代理关闭）
 func updateStatus(status *systray.MenuItem, proxy *systray.MenuItem) {
-	state := "off"
+	state := "代理关闭"
 	if isSystemProxyEnabled {
-		state = "on"
+		state = "代理开启"
 	}
-	status.SetTitle(fmt.Sprintf("代理状态\n%s[%s]", state, currentMixedPort))
+	status.SetTitle(fmt.Sprintf("%s\n[%s]", state, currentMixedPort))
 
 	if isSystemProxyEnabled {
 		proxy.Check()
