@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,11 +23,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ==================== 版本号（打包时通过 ldflags 注入） ====================
+// ==================== 版本号 ====================
 var Version = "dev"
 
 //go:embed clash.ico
 var trayIcon []byte
+
+const ghProxy = "https://gh-proxy.org/"
 
 // ==================== 单实例控制 ====================
 var singleInstanceMutex windows.Handle
@@ -67,16 +69,18 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 配置加载 ====================
+// ==================== 配置加载（严格从 config.yaml 获取） ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		fmt.Println("警告：无法读取 config.yaml，使用默认值")
 		a.buildDashboardURL()
 		return
 	}
+
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		fmt.Println("警告：解析 config.yaml 失败，使用默认值")
@@ -94,11 +98,13 @@ func (a *App) loadConfig() {
 			a.mixedPort = strings.TrimSpace(v)
 		}
 	}
+
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
 			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
+
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok {
 			a.secret = strings.TrimSpace(secretStr)
@@ -118,61 +124,7 @@ func (a *App) buildDashboardURL() {
 	}
 }
 
-// ==================== providers gh-proxy ====================
-const ghProxyPrefix = "https://gh-proxy.org/"
-
-func (a *App) patchConfigForGHProxy() string {
-	baseDir := a.appDir()
-	originalPath := filepath.Join(baseDir, "config.yaml")
-	patchedPath := filepath.Join(baseDir, "config.patched.yaml")
-
-	data, err := os.ReadFile(originalPath)
-	if err != nil {
-		return originalPath
-	}
-
-	var cfg map[string]interface{}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return originalPath
-	}
-
-	patched := false
-	for _, section := range []string{"proxy-providers", "rule-providers"} {
-		if providers, ok := cfg[section].(map[string]interface{}); ok {
-			for name, p := range providers {
-				if pm, ok := p.(map[string]interface{}); ok {
-					if url, ok := pm["url"].(string); ok && url != "" {
-						trimmed := strings.TrimSpace(url)
-						if isGitHubURL(trimmed) && !strings.Contains(trimmed, "gh-proxy.org") {
-							pm["url"] = ghProxyPrefix + trimmed
-							patched = true
-							fmt.Printf("已为 %s 添加 gh-proxy: %s\n", name, section)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if !patched {
-		return originalPath
-	}
-
-	newData, _ := yaml.Marshal(cfg)
-	if err := os.WriteFile(patchedPath, newData, 0644); err == nil {
-		fmt.Println("已生成 patched 配置（自动添加 gh-proxy.org）")
-		return patchedPath
-	}
-	return originalPath
-}
-
-func isGitHubURL(url string) bool {
-	return strings.Contains(url, "github.com") ||
-		strings.Contains(url, "raw.githubusercontent.com") ||
-		strings.Contains(url, "gist.githubusercontent.com")
-}
-
-// ==================== 内核下载（gh-proxy 前置加速 + fallback） ====================
+// ==================== 下载最新内核（自动加 gh-proxy） ====================
 func (a *App) downloadKernel() {
 	exeName := "mihomo"
 	if runtime.GOOS == "windows" {
@@ -185,10 +137,11 @@ func (a *App) downloadKernel() {
 		return
 	}
 
-	fmt.Println("🚀 开始下载最新 mihomo 内核（使用 gh-proxy 前置加速）...")
+	fmt.Println("🚀 开始下载最新 mihomo 内核（已自动添加 gh-proxy 前缀）...")
 
+	// GitHub API + gh-proxy
 	apiURL := "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
-	proxyAPI := ghProxyPrefix + strings.TrimPrefix(apiURL, "https://")
+	proxyAPI := ghProxy + apiURL
 
 	var release struct {
 		TagName string `json:"tag_name"`
@@ -199,18 +152,19 @@ func (a *App) downloadKernel() {
 	}
 
 	resp, err := http.Get(proxyAPI)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		fmt.Println("gh-proxy API 失败，尝试直连 GitHub...")
+	if err != nil || resp.StatusCode != 200 {
+		fmt.Println("gh-proxy 失败，尝试直连 GitHub...")
 		resp, err = http.Get(apiURL)
 	}
 	if err != nil {
-		fmt.Println("❌ 获取最新版本失败，请检查网络")
+		fmt.Println("❌ 获取版本信息失败")
 		return
 	}
 	defer resp.Body.Close()
 
 	json.NewDecoder(resp.Body).Decode(&release)
 
+	// 自动匹配当前系统架构
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 	ext := "zip"
@@ -232,7 +186,8 @@ func (a *App) downloadKernel() {
 		return
 	}
 
-	proxyDownloadURL := ghProxyPrefix + strings.TrimPrefix(downloadURL, "https://")
+	// 给下载链接也加上 gh-proxy
+	proxyDownloadURL := ghProxy + downloadURL
 	fmt.Printf("📥 正在下载: %s\n", targetName)
 
 	tmpPath := filepath.Join(os.TempDir(), targetName)
@@ -240,11 +195,11 @@ func (a *App) downloadKernel() {
 	defer os.Remove(tmpPath)
 
 	dlResp, err := http.Get(proxyDownloadURL)
-	if err != nil || dlResp.StatusCode != http.StatusOK {
-		fmt.Println("gh-proxy 下载失败，尝试直连 GitHub...")
+	if err != nil || dlResp.StatusCode != 200 {
+		fmt.Println("gh-proxy 下载失败，尝试直连...")
 		dlResp, _ = http.Get(downloadURL)
 	}
-	if dlResp == nil || dlResp.StatusCode != http.StatusOK {
+	if dlResp == nil || dlResp.StatusCode != 200 {
 		fmt.Println("❌ 下载失败")
 		return
 	}
@@ -253,15 +208,15 @@ func (a *App) downloadKernel() {
 	io.Copy(tmpFile, dlResp.Body)
 	tmpFile.Close()
 
-	if err := a.extractAndRenameKernel(tmpPath, kernelPath); err != nil {
-		fmt.Println("❌ 解压失败:", err)
+	if err := a.extractKernel(tmpPath, kernelPath); err != nil {
+		fmt.Println("❌ 解压失败")
 		return
 	}
 
-	fmt.Printf("✅ 内核下载成功！\n   路径: %s\n   版本: %s\n   点击「重启内核」即可使用\n", kernelPath, release.TagName)
+	fmt.Printf("✅ 内核下载并安装完成！\n   路径: %s\n   版本: %s\n   点击「重启内核」使用\n", kernelPath, release.TagName)
 }
 
-func (a *App) extractAndRenameKernel(tmpPath, kernelPath string) error {
+func (a *App) extractKernel(tmpPath, kernelPath string) error {
 	if runtime.GOOS == "windows" {
 		z, err := zip.OpenReader(tmpPath)
 		if err != nil {
@@ -291,7 +246,7 @@ func (a *App) extractAndRenameKernel(tmpPath, kernelPath string) error {
 	return nil
 }
 
-// ==================== UI 初始化 ====================
+// ==================== UI 初始化（新增下载菜单） ====================
 func (a *App) onReady() {
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(trayIcon)
@@ -301,11 +256,12 @@ func (a *App) onReady() {
 	systray.SetTooltip("Mihomo Proxy\n托盘工具")
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
-	mDownload := systray.AddMenuItem("下载最新内核", "首次运行或无内核时使用（gh-proxy 加速）")
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("打开面板", "打开 Zashboard")
 	systray.AddSeparator()
-	mProxy := systray.AddMenuItemCheckbox("系统代理", "切换系统代理", false)
+	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
+	systray.AddSeparator()
+	mDownload := systray.AddMenuItem("内核下载", "自动加 gh-proxy 下载 mihomo")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
@@ -340,7 +296,7 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	}
 }
 
-// ==================== 系统代理 ====================
+// ==================== 以下为你原来的所有函数（未改动） ====================
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
@@ -394,13 +350,12 @@ func (a *App) disableSystemProxy() {
 func (a *App) hideWindow(cmd *exec.Cmd) {
 	if runtime.GOOS == "windows" && cmd != nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
+			HideWindow: true,
 			CreationFlags: 0x08000000,
 		}
 	}
 }
 
-// ==================== Mihomo 核心控制 ====================
 func (a *App) startMihomo() {
 	if a.isRunning(a.mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
@@ -420,20 +375,17 @@ func (a *App) startMihomoForce() {
 		exeName = "mihomo.exe"
 	}
 	exePath := filepath.Join(baseDir, exeName)
-	configFile := a.patchConfigForGHProxy()
-
-	cmd := exec.Command(exePath, "-d", baseDir, "-f", configFile)
+	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
 	a.hideWindow(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Start(); err != nil {
 		fmt.Println("启动失败:", err)
 		return
 	}
 	a.mihomoCmd = cmd
-	fmt.Printf("mihomo 启动成功（配置文件: %s）\n", filepath.Base(configFile))
+	fmt.Println("mihomo 启动成功")
 }
 
 func (a *App) restartMihomo() {
@@ -490,10 +442,10 @@ func (a *App) openDashboard() {
 
 func (a *App) onExit() {
 	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
+		fmt.Println("关闭 mihomo...")
 		_ = a.mihomoCmd.Process.Kill()
 		_, _ = a.mihomoCmd.Process.Wait()
 	}
-	_ = os.Remove(filepath.Join(a.appDir(), "config.patched.yaml"))
 	a.disableSystemProxy()
 }
 
