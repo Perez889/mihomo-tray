@@ -1,11 +1,10 @@
 name: Build Mihomo Tray
 
 on:
-  # 手动触发（强烈推荐）
   workflow_dispatch:
     inputs:
       version:
-        description: '0.0.1'
+        description: '版本号（例如 v1.0.0）'
         required: true
         default: 'v1.0.0'
       compression_level:
@@ -17,10 +16,6 @@ on:
           - ultra-brute
           - best
           - normal
-
-  # 可选：push 到 main/master 时自动构建
-  push:
-    branches: [ main, master ]
 
 jobs:
   build:
@@ -41,7 +36,6 @@ jobs:
               go mod init mihomo_tray
           }
           
-          # 添加需要的依赖
           go get github.com/getlantern/systray
           go get gopkg.in/yaml.v3
           
@@ -57,11 +51,7 @@ jobs:
         id: set_version
         shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $ver = "${{ inputs.version }}"
-          } else {
-            $ver = "${{ github.sha }}".Substring(0,8)
-          }
+          $ver = "${{ inputs.version }}"
           echo "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "当前版本号: $ver"
 
@@ -75,7 +65,7 @@ jobs:
           version: latest
           files: |
             mihomo_tray.exe
-          args: --${{ inputs.compression_level || 'ultra-brute' }} --lzma
+          args: --${{ inputs.compression_level }} --lzma
 
       - name: Rename with Version
         shell: pwsh
