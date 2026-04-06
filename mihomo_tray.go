@@ -62,7 +62,7 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 配置加载（关键修改） ====================
+// ==================== 配置加载（优化后的逻辑） ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
@@ -93,16 +93,17 @@ func (a *App) loadConfig() {
 		}
 	}
 
-	// external-controller（未设置则保留默认）
+	// external-controller：用户未设置或为空时，保留默认值 127.0.0.1:9090
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
 			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
-	// secret（严格按照你的要求）
-	// 未设置字段 或 值为空字符串 → secret = ""（无需 secret 登录）
-	// 已设置具体值 → 使用用户设置的值
+	// secret：关键优化
+	// - config.yaml 中完全没有 secret 字段 → secret = ""（无需密码登录）
+	// - 有 secret 字段但值为空 → secret = ""（无需密码登录）
+	// - 有 secret 字段且有具体值 → 使用用户设置的值（支持任意密码）
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok {
 			a.secret = strings.TrimSpace(secretStr)
