@@ -45,7 +45,8 @@ jobs:
         run: go install github.com/akavel/rsrc@latest
 
       - name: Generate 64bit app.syso (嵌入 clash.ico)
-        run: rsrc -arch amd64 -ico clash.ico -o app.syso
+        run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
+
 
       - name: Set Version
         id: set_version
