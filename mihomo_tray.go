@@ -132,11 +132,10 @@ func (a *App) onReady() {
     systray.AddSeparator()
     
     // 代理模式
-    mMode := systray.AddMenuItem("代理模式", "切换代理模式")
+    mMode := systray.AddMenuItem("出站模式", "切换代理模式")
+    systray.AddSeparator()
     mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
-    systray.AddSeparator()
     mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
-    systray.AddSeparator()
     mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
     
     // 系统代理
