@@ -1,4 +1,4 @@
-name: Build Mihomo Tray
+name: Build Mihomo Lite
 
 on:
   workflow_dispatch:
@@ -57,7 +57,7 @@ jobs:
 
       - name: Build Windows EXE (带版本号)
         run: |
-          go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o mihomo_tray.exe .
+          go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o NetTray.exe .
 
       - name: Compress with UPX
         uses: crazy-max/ghaction-upx@v3
@@ -71,10 +71,10 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ env.VERSION }}".Replace('/', '-').Replace(':', '-')
-          Rename-Item -Path "mihomo_tray.exe" -NewName "mihomo_tray_${ver}.exe"
+          Rename-Item -Path "NetTray.exe" -NewName "NetTray_${ver}.exe"
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: mihomo_tray_exe
-          path: mihomo_tray_*.exe
+          name: NetTray_exe
+          path: NetTray_*.exe
