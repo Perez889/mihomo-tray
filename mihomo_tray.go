@@ -2,8 +2,10 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +47,7 @@ func ensureSingleInstance() {
 type App struct {
 	mihomoCmd            *exec.Cmd
 	isSystemProxyEnabled bool
+	isTUNEnabled         bool // 新增：统一管理 TUN 真实状态
 	mixedPort            string
 	controllerAddr       string
 	secret               string
@@ -54,26 +57,25 @@ type App struct {
 func NewApp() *App {
 	app := &App{
 		isSystemProxyEnabled: false,
+		isTUNEnabled:         false,
 		mixedPort:            "1081",
 		controllerAddr:       "127.0.0.1:9090",
-		secret:               "", // 默认空字符串
+		secret:               "",
 	}
 	app.loadConfig()
 	return app
 }
 
-// ==================== 配置加载（优化后的逻辑） ====================
+// ==================== 配置加载 ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
-
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		fmt.Println("警告：无法读取 config.yaml，使用默认值")
 		a.buildDashboardURL()
 		return
 	}
-
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		fmt.Println("警告：解析 config.yaml 失败，使用默认值")
@@ -81,7 +83,6 @@ func (a *App) loadConfig() {
 		return
 	}
 
-	// mixed-port
 	if p, ok := cfg["mixed-port"]; ok {
 		switch v := p.(type) {
 		case int:
@@ -93,17 +94,12 @@ func (a *App) loadConfig() {
 		}
 	}
 
-	// external-controller：用户未设置或为空时，保留默认值 127.0.0.1:9090
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
 			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
-	// secret：关键优化
-	// - config.yaml 中完全没有 secret 字段 → secret = ""（无需密码登录）
-	// - 有 secret 字段但值为空 → secret = ""（无需密码登录）
-	// - 有 secret 字段且有具体值 → 使用用户设置的值（支持任意密码）
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok {
 			a.secret = strings.TrimSpace(secretStr)
@@ -111,7 +107,6 @@ func (a *App) loadConfig() {
 	}
 
 	a.buildDashboardURL()
-
 	fmt.Printf("配置加载成功 → 系统代理端口: %s | 控制器: %s | Secret: %q\n",
 		a.mixedPort, a.controllerAddr, a.secret)
 }
@@ -131,17 +126,24 @@ func (a *App) onReady() {
 	} else {
 		systray.SetTemplateIcon(trayIcon, trayIcon)
 	}
-	systray.SetTooltip("Mihomo Proxy\n托盘工具")
+	systray.SetTooltip("Mihomo Lite\n轻量托盘工具")
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem("打开面板", "打开 Zashboard")
 	systray.AddSeparator()
+
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
+	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式（全局透明代理）", false)
+	systray.AddSeparator()
+
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
 	a.updateProxyMenu(mProxy)
+
+	// 启动后延迟同步 TUN 状态（带重试，更可靠）
+	go a.syncTunStateWithRetry(mTun, 10)
 
 	go func() {
 		for {
@@ -152,6 +154,8 @@ func (a *App) onReady() {
 				a.openDashboard()
 			case <-mProxy.ClickedCh:
 				a.toggleSystemProxy(mProxy)
+			case <-mTun.ClickedCh:
+				a.toggleTun(mTun)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -162,6 +166,102 @@ func (a *App) onReady() {
 	go a.startMihomo()
 }
 
+// ==================== TUN 状态同步（带重试） ====================
+func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
+	for i := 0; i < maxRetries; i++ {
+		if a.fetchAndUpdateTunState(m) {
+			return
+		}
+		time.Sleep(800 * time.Millisecond)
+	}
+	fmt.Println("警告：多次尝试后仍无法获取 TUN 状态（mihomo 可能尚未启动完成）")
+}
+
+func (a *App) fetchAndUpdateTunState(m *systray.MenuItem) bool {
+	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
+	req, _ := http.NewRequest("GET", url, nil)
+	if a.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+a.secret)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return false
+	}
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return false
+	}
+
+	if tunCfg, ok := data["tun"].(map[string]interface{}); ok {
+		if enabled, ok := tunCfg["enable"].(bool); ok {
+			a.isTUNEnabled = enabled
+			if enabled {
+				m.Check()
+			} else {
+				m.Uncheck()
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// ==================== TUN 开关 ====================
+func (a *App) toggleTun(m *systray.MenuItem) {
+	newEnable := !a.isTUNEnabled
+
+	if err := a.setTun(newEnable); err != nil {
+		fmt.Printf("切换 TUN 失败: %v\n", err)
+		// 失败时强制刷新一次真实状态
+		a.fetchAndUpdateTunState(m)
+		return
+	}
+
+	a.isTUNEnabled = newEnable
+	if newEnable {
+		m.Check()
+		fmt.Println("TUN 模式已开启（mihomo 自动创建虚拟网卡）")
+	} else {
+		m.Uncheck()
+		fmt.Println("TUN 模式已关闭（mihomo 自动释放虚拟网卡）")
+	}
+}
+
+func (a *App) setTun(enable bool) error {
+	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
+	body := fmt.Sprintf(`{"tun":{"enable":%v}}`, enable)
+
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if a.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+a.secret)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ==================== 系统代理开关 ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -170,7 +270,6 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	}
 }
 
-// ==================== 系统代理开关（保持原样） ====================
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
@@ -193,14 +292,6 @@ func (a *App) enableSystemProxy(proxyAddr string) {
 				`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 1`)
 		a.hideWindow(cmd)
 		_ = cmd.Run()
-	case "darwin":
-		exec.Command("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
-		exec.Command("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
-		exec.Command("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", a.mixedPort).Start()
-	default:
-		exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual").Run()
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "host", "127.0.0.1").Run()
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", a.mixedPort).Run()
 	}
 }
 
@@ -212,12 +303,6 @@ func (a *App) disableSystemProxy() {
 			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
 		a.hideWindow(cmd)
 		_ = cmd.Run()
-	case "darwin":
-		exec.Command("networksetup", "-setwebproxystate", "Wi-Fi", "off").Start()
-		exec.Command("networksetup", "-setsecurewebproxystate", "Wi-Fi", "off").Start()
-		exec.Command("networksetup", "-setsocksfirewallproxystate", "Wi-Fi", "off").Start()
-	default:
-		exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "none").Run()
 	}
 }
 
@@ -230,7 +315,7 @@ func (a *App) hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== Mihomo 核心控制（保持原样） ====================
+// ==================== Mihomo 核心控制 ====================
 func (a *App) startMihomo() {
 	if a.isRunning(a.mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
@@ -315,6 +400,7 @@ func (a *App) openDashboard() {
 	cmd.Start()
 }
 
+// ==================== 退出处理 ====================
 func (a *App) onExit() {
 	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
 		fmt.Println("关闭 mihomo...")
@@ -322,6 +408,9 @@ func (a *App) onExit() {
 		_, _ = a.mihomoCmd.Process.Wait()
 	}
 	a.disableSystemProxy()
+	// 优雅关闭 TUN（推荐）
+	_ = a.setTun(false)
+	fmt.Println("TUN 模式已自动关闭")
 }
 
 func (a *App) appDir() string {
