@@ -528,4 +528,5 @@ func (a *App) appDir() string {
 func main() {
     ensureSingleInstance()
     app := NewApp()
-    systr
+    systray.Run(app.onReady, app.onExit)
+}
