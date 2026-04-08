@@ -23,8 +23,9 @@ import (
 // ==================== 版本号 ====================
 var Version = "dev"
 
-//go:embed clash.ico
+//go:embed icon/logo.ico
 var trayIcon []byte
+
 
 // ==================== 单实例控制 ====================
 var singleInstanceMutex windows.Handle
