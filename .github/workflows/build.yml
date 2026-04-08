@@ -64,7 +64,7 @@ jobs:
         with:
           version: latest
           files: |
-            mihomo_tray.exe
+            NetTray.exe
           args: --${{ inputs.compression_level }} --lzma
 
       - name: Rename with Version
