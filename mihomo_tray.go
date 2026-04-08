@@ -128,23 +128,23 @@ func (a *App) onReady() {
     }
     systray.SetTooltip("Mihomo Lite\n轻量托盘工具")
 
-    mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
-    systray.AddSeparator()
     mOpen := systray.AddMenuItem("打开面板", "打开 Zashboard")
     systray.AddSeparator()
-
+    
+    // 代理模式
+    mMode := systray.AddMenuItem("代理模式", "切换代理模式")
+    mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
+    systray.AddSeparator()
+    mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
+    systray.AddSeparator()
+    mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
+    
     // 系统代理
     mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
     systray.AddSeparator()
-
-    // 代理模式子菜单
-    mMode := systray.AddMenuItem("代理模式", "切换代理模式")
-    mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
-    mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
-    mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
-
-    systray.AddSeparator()
     mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", false)
+    systray.AddSeparator()
+    mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
     systray.AddSeparator()
     mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
