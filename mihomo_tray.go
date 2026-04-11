@@ -58,7 +58,6 @@ func isAdmin() bool {
 		return false
 	}
 	defer windows.FreeSid(sid)
-
 	token := windows.GetCurrentProcessToken()
 	member, err := token.IsMember(sid)
 	if err != nil {
@@ -74,12 +73,10 @@ func runAsAdmin() {
 		fmt.Println("无法获取可执行文件路径:", err)
 		return
 	}
-
 	verbPtr, _ := windows.UTF16PtrFromString("runas")
 	exePtr, _ := windows.UTF16PtrFromString(exe)
 	cwdPtr, _ := windows.UTF16PtrFromString("")
 	argPtr, _ := windows.UTF16PtrFromString(strings.Join(os.Args[1:], " "))
-
 	err = windows.ShellExecute(0, verbPtr, exePtr, argPtr, cwdPtr, windows.SW_NORMAL)
 	if err != nil {
 		fmt.Println("请求管理员权限失败:", err)
@@ -96,6 +93,10 @@ type App struct {
 	secret               string
 	dashboardURL         string
 	currentMode          string
+
+	// 新增：菜单项引用，解决状态不同步问题
+	mProxy *systray.MenuItem
+	mTun   *systray.MenuItem
 }
 
 func NewApp() *App {
@@ -111,7 +112,7 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 配置加载 ====================
+// ==================== 配置加载（已修复 1、2 条） ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
@@ -141,10 +142,17 @@ func (a *App) loadConfig() {
 		}
 	}
 
-	// external-controller
+	// external-controller（彻底修复）
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
-			a.controllerAddr = strings.TrimSpace(ctrlStr)
+			ctrlStr = strings.TrimSpace(ctrlStr)
+			ctrlStr = strings.Trim(ctrlStr, `"'`)           // 去引号
+			ctrlStr = strings.TrimPrefix(ctrlStr, "http://")
+			ctrlStr = strings.TrimPrefix(ctrlStr, "https://")
+			if strings.HasPrefix(ctrlStr, "0.0.0.0") {
+				ctrlStr = "127.0.0.1" + ctrlStr[7:]
+			}
+			a.controllerAddr = ctrlStr
 		}
 	}
 
@@ -160,14 +168,11 @@ func (a *App) loadConfig() {
 		if tunMap, ok := tun.(map[string]interface{}); ok {
 			if enable, ok := tunMap["enable"].(bool); ok {
 				a.isTUNEnabled = enable
-				fmt.Printf("从 config.yaml 读取 TUN 配置 → enable: %v\n", enable)
 			} else if enableStr, ok := tunMap["enable"].(string); ok {
 				a.isTUNEnabled = strings.ToLower(strings.TrimSpace(enableStr)) == "true"
-				fmt.Printf("从 config.yaml 读取 TUN 配置 → enable: %v (string)\n", a.isTUNEnabled)
 			}
 		}
 	} else {
-		fmt.Println("config.yaml 中未找到 tun 配置，默认 TUN: false")
 		a.isTUNEnabled = false
 	}
 
@@ -202,21 +207,21 @@ func (a *App) onReady() {
 	mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
 	mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
 
-	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
+	a.mProxy = systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
-	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
+	a.mTun = systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
 	systray.AddSeparator()
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
-	a.updateProxyMenu(mProxy)
+	a.updateProxyMenu(a.mProxy)
 
 	// 启动后同步状态
 	go func() {
 		time.Sleep(1800 * time.Millisecond)
-		a.syncTunStateWithRetry(mTun, 15)
+		a.syncTunStateWithRetry(a.mTun, 15)
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 12)
 	}()
 
@@ -227,16 +232,16 @@ func (a *App) onReady() {
 				a.restartMihomo()
 			case <-mOpen.ClickedCh:
 				a.openDashboard()
-			case <-mProxy.ClickedCh:
-				a.toggleSystemProxy(mProxy)
+			case <-a.mProxy.ClickedCh:
+				a.toggleSystemProxy()
 			case <-mRule.ClickedCh:
 				a.setMode("rule", mRule, mGlobal, mDirect)
 			case <-mGlobal.ClickedCh:
 				a.setMode("global", mRule, mGlobal, mDirect)
 			case <-mDirect.ClickedCh:
 				a.setMode("direct", mRule, mGlobal, mDirect)
-			case <-mTun.ClickedCh:
-				a.toggleTun(mTun)
+			case <-a.mTun.ClickedCh:
+				a.toggleTun()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -245,9 +250,10 @@ func (a *App) onReady() {
 	}()
 
 	go a.startMihomo()
+	go a.monitorMihomo() // 新增崩溃自动重启监控
 }
 
-// ==================== 代理模式相关 ====================
+// ==================== 代理模式相关（401/404 统一提示） ====================
 func (a *App) updateModeUI(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	mRule.Uncheck()
 	mGlobal.Uncheck()
@@ -273,62 +279,26 @@ func (a *App) syncModeStateWithRetry(mRule, mGlobal, mDirect *systray.MenuItem, 
 }
 
 func (a *App) fetchAndUpdateModeState(mRule, mGlobal, mDirect *systray.MenuItem) bool {
-	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
-	req, _ := http.NewRequest("GET", url, nil)
-	if a.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+a.secret)
-	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		if resp != nil {
-			resp.Body.Close()
+	return a.apiGet("/configs", func(data map[string]interface{}) bool {
+		if mode, ok := data["mode"].(string); ok {
+			a.currentMode = mode
+			a.updateModeUI(mode, mRule, mGlobal, mDirect)
+			return true
 		}
 		return false
-	}
-	defer resp.Body.Close()
-
-	var data map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return false
-	}
-	if mode, ok := data["mode"].(string); ok {
-		a.currentMode = mode
-		a.updateModeUI(mode, mRule, mGlobal, mDirect)
-		return true
-	}
-	return false
+	})
 }
 
 func (a *App) setMode(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
-	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
 	body := fmt.Sprintf(`{"mode":"%s"}`, mode)
-	req, err := http.NewRequest("PATCH", url, strings.NewReader(body))
-	if err != nil {
-		fmt.Println("设置模式失败:", err)
-		return
+	if a.apiPatch("/configs", body) {
+		a.currentMode = mode
+		a.updateModeUI(mode, mRule, mGlobal, mDirect)
+		fmt.Printf("已切换到 %s 模式\n", strings.ToUpper(mode))
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if a.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+a.secret)
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("切换到 %s 模式失败\n", mode)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		fmt.Printf("切换到 %s 模式失败（HTTP %d）\n", mode, resp.StatusCode)
-		return
-	}
-	a.currentMode = mode
-	a.updateModeUI(mode, mRule, mGlobal, mDirect)
-	fmt.Printf("已切换到 %s 模式\n", strings.ToUpper(mode))
 }
 
-// ==================== TUN 相关（允许同时开启） ====================
+// ==================== TUN 相关（允许同时开启 + 统一 API 错误提示） ====================
 func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 	for i := 0; i < maxRetries; i++ {
 		if a.fetchAndUpdateTunState(m) {
@@ -340,82 +310,39 @@ func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 }
 
 func (a *App) fetchAndUpdateTunState(m *systray.MenuItem) bool {
-	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
-	req, _ := http.NewRequest("GET", url, nil)
-	if a.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+a.secret)
-	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return false
-	}
-	defer resp.Body.Close()
-
-	var data map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return false
-	}
-
-	if tunCfg, ok := data["tun"].(map[string]interface{}); ok {
-		if enabled, ok := tunCfg["enable"].(bool); ok {
-			a.isTUNEnabled = enabled
-			if enabled {
-				m.Check()
-			} else {
-				m.Uncheck()
+	return a.apiGet("/configs", func(data map[string]interface{}) bool {
+		if tunCfg, ok := data["tun"].(map[string]interface{}); ok {
+			if enabled, ok := tunCfg["enable"].(bool); ok {
+				a.isTUNEnabled = enabled
+				if enabled {
+					m.Check()
+				} else {
+					m.Uncheck()
+				}
+				return true
 			}
-			return true
 		}
-	}
-	return false
+		return false
+	})
 }
 
-func (a *App) toggleTun(m *systray.MenuItem) {
+func (a *App) toggleTun() {
 	newEnable := !a.isTUNEnabled
 	fmt.Printf("尝试切换 TUN 模式 → %v\n", newEnable)
 
 	if err := a.setTun(newEnable); err != nil {
 		fmt.Printf("TUN PATCH 请求失败: %v\n", err)
-		a.fetchAndUpdateTunState(m)
+		a.fetchAndUpdateTunState(a.mTun)
 		return
 	}
 
-	time.Sleep(1500 * time.Millisecond) // 给 mihomo 足够时间应用 TUN
-
-	if a.fetchAndUpdateTunState(m) {
-		fmt.Printf("TUN 切换完成，当前实际状态: %v\n", a.isTUNEnabled)
-		// 这里不再强制关闭系统代理，允许同时开启
-	} else {
-		fmt.Println("警告：TUN 切换后无法获取最新状态")
-	}
+	time.Sleep(1500 * time.Millisecond)
+	a.fetchAndUpdateTunState(a.mTun)
 }
 
 func (a *App) setTun(enable bool) error {
-	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
 	body := fmt.Sprintf(`{"tun":{"enable":%v}}`, enable)
-	req, err := http.NewRequest("PATCH", url, strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if a.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+a.secret)
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
-	}
-	return nil
+	return a.apiPatch("/configs", body)
 }
 
 // ==================== 系统代理（允许同时开启 + 警告） ====================
@@ -427,7 +354,7 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	}
 }
 
-func (a *App) toggleSystemProxy(m *systray.MenuItem) {
+func (a *App) toggleSystemProxy() {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
 
@@ -442,7 +369,7 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 		a.disableSystemProxy()
 		fmt.Println("系统代理已关闭")
 	}
-	a.updateProxyMenu(m)
+	a.updateProxyMenu(a.mProxy)
 }
 
 func (a *App) enableSystemProxy(proxyAddr string) {
@@ -473,7 +400,74 @@ func (a *App) hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== Mihomo 核心控制 ====================
+// ==================== 统一 API 调用（修复 3、4 条） ====================
+func (a *App) apiGet(endpoint string, handler func(map[string]interface{}) bool) bool {
+	url := fmt.Sprintf("http://%s%s", a.controllerAddr, endpoint)
+	req, _ := http.NewRequest("GET", url, nil)
+	if a.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+a.secret)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case 401:
+		fmt.Println("错误：Secret 不正确，请检查 config.yaml 中的 secret 配置")
+		return false
+	case 404:
+		fmt.Println("错误：Mihomo external-controller 未开启，请检查 config.yaml")
+		return false
+	case 200:
+		// 正常
+	default:
+		return false
+	}
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return false
+	}
+	return handler(data)
+}
+
+func (a *App) apiPatch(endpoint, body string) error {
+	url := fmt.Sprintf("http://%s%s", a.controllerAddr, endpoint)
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if a.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+a.secret)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 401 {
+		fmt.Println("错误：Secret 不正确，请检查 config.yaml 中的 secret 配置")
+		return fmt.Errorf("secret 错误")
+	}
+	if resp.StatusCode == 404 {
+		fmt.Println("错误：Mihomo external-controller 未开启，请检查 config.yaml")
+		return fmt.Errorf("API 未开启")
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// ==================== Mihomo 核心控制（修复 5 条：mihomo.exe 不存在提示） ====================
 func (a *App) startMihomo() {
 	if a.isRunning(a.mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
@@ -490,17 +484,40 @@ func (a *App) startMihomoForce() {
 	baseDir := a.appDir()
 	exeName := "mihomo.exe"
 	exePath := filepath.Join(baseDir, exeName)
+
+	if _, err := os.Stat(exePath); os.IsNotExist(err) {
+		fmt.Printf("【错误】未找到 mihomo.exe！\n请确保 mihomo.exe 与本程序在同一目录下\n路径：%s\n", exePath)
+		return
+	}
+
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
 	a.hideWindow(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Start(); err != nil {
-		fmt.Println("启动失败:", err)
+		fmt.Printf("启动 mihomo 失败: %v\n", err)
 		return
 	}
 	a.mihomoCmd = cmd
 	fmt.Println("mihomo 启动成功")
+}
+
+// ==================== 崩溃自动重启监控（修复 6 条） ====================
+func (a *App) monitorMihomo() {
+	ticker := time.NewTicker(8 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if a.mihomoCmd == nil || a.mihomoCmd.Process == nil {
+			continue
+		}
+		if !a.isRunning(a.mihomoCmd) {
+			fmt.Println("检测到 mihomo 已崩溃 → 自动重启")
+			a.restartMihomo()
+		}
+	}
 }
 
 func (a *App) restartMihomo() {
@@ -524,6 +541,7 @@ func (a *App) waitForRelease() {
 	}
 }
 
+// ==================== 其他工具方法 ====================
 func (a *App) isPortOpen(addr string) bool {
 	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {
@@ -556,8 +574,8 @@ func (a *App) openDashboard() {
 }
 
 func (a *App) onExit() {
+	fmt.Println("正在退出...")
 	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
-		fmt.Println("关闭 mihomo...")
 		_ = a.mihomoCmd.Process.Kill()
 		_, _ = a.mihomoCmd.Process.Wait()
 	}
