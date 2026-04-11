@@ -43,7 +43,7 @@ func ensureSingleInstance() {
 	}
 }
 
-// ==================== 管理员权限 ====================
+// ==================== 检查是否以管理员权限运行 ====================
 func isAdmin() bool {
 	var sid *windows.SID
 	err := windows.AllocateAndInitializeSid(
@@ -58,6 +58,7 @@ func isAdmin() bool {
 		return false
 	}
 	defer windows.FreeSid(sid)
+
 	token := windows.GetCurrentProcessToken()
 	member, err := token.IsMember(sid)
 	if err != nil {
@@ -66,17 +67,23 @@ func isAdmin() bool {
 	return member
 }
 
+// ==================== 以管理员权限重新启动自身 ====================
 func runAsAdmin() {
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Println("无法获取可执行文件路径:", err)
 		return
 	}
+
 	verbPtr, _ := windows.UTF16PtrFromString("runas")
 	exePtr, _ := windows.UTF16PtrFromString(exe)
 	cwdPtr, _ := windows.UTF16PtrFromString("")
 	argPtr, _ := windows.UTF16PtrFromString(strings.Join(os.Args[1:], " "))
-	_ = windows.ShellExecute(0, verbPtr, exePtr, argPtr, cwdPtr, windows.SW_NORMAL)
+
+	err = windows.ShellExecute(0, verbPtr, exePtr, argPtr, cwdPtr, windows.SW_NORMAL)
+	if err != nil {
+		fmt.Println("请求管理员权限失败:", err)
+	}
 }
 
 // ==================== 主应用结构体 ====================
@@ -122,6 +129,7 @@ func (a *App) loadConfig() {
 		return
 	}
 
+	// mixed-port
 	if p, ok := cfg["mixed-port"]; ok {
 		switch v := p.(type) {
 		case int:
@@ -133,12 +141,14 @@ func (a *App) loadConfig() {
 		}
 	}
 
+	// external-controller
 	if ctrl, ok := cfg["external-controller"]; ok {
 		if ctrlStr, ok := ctrl.(string); ok && ctrlStr != "" {
 			a.controllerAddr = strings.TrimSpace(ctrlStr)
 		}
 	}
 
+	// secret
 	if s, ok := cfg["secret"]; ok {
 		if secretStr, ok := s.(string); ok {
 			a.secret = strings.TrimSpace(secretStr)
@@ -205,12 +215,10 @@ func (a *App) onReady() {
 
 	// 启动后同步状态
 	go func() {
-		time.Sleep(2200 * time.Millisecond)
-		a.syncTunStateWithRetry(mTun, 18)
+		time.Sleep(1800 * time.Millisecond)
+		a.syncTunStateWithRetry(mTun, 15)
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 12)
 	}()
-
-	go a.monitorMihomo() // ← 防崩溃自动重启
 
 	go func() {
 		for {
@@ -320,7 +328,7 @@ func (a *App) setMode(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	fmt.Printf("已切换到 %s 模式\n", strings.ToUpper(mode))
 }
 
-// ==================== TUN 相关（已优化点击延迟） ====================
+// ==================== TUN 相关（允许同时开启） ====================
 func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 	for i := 0; i < maxRetries; i++ {
 		if a.fetchAndUpdateTunState(m) {
@@ -370,24 +378,20 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 	newEnable := !a.isTUNEnabled
 	fmt.Printf("尝试切换 TUN 模式 → %v\n", newEnable)
 
-	// 立即给视觉反馈，减少感知延迟
-	if newEnable {
-		m.Check()
-	} else {
-		m.Uncheck()
-	}
-
 	if err := a.setTun(newEnable); err != nil {
 		fmt.Printf("TUN PATCH 请求失败: %v\n", err)
 		a.fetchAndUpdateTunState(m)
 		return
 	}
 
-	// 缩短等待时间
-	time.Sleep(800 * time.Millisecond)
-	a.fetchAndUpdateTunState(m)
+	time.Sleep(1500 * time.Millisecond) // 给 mihomo 足够时间应用 TUN
 
-	fmt.Printf("TUN 切换完成，当前实际状态: %v\n", a.isTUNEnabled)
+	if a.fetchAndUpdateTunState(m) {
+		fmt.Printf("TUN 切换完成，当前实际状态: %v\n", a.isTUNEnabled)
+		// 这里不再强制关闭系统代理，允许同时开启
+	} else {
+		fmt.Println("警告：TUN 切换后无法获取最新状态")
+	}
 }
 
 func (a *App) setTun(enable bool) error {
@@ -414,7 +418,7 @@ func (a *App) setTun(enable bool) error {
 	return nil
 }
 
-// ==================== 系统代理 ====================
+// ==================== 系统代理（允许同时开启 + 警告） ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -430,6 +434,7 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		if a.isTUNEnabled {
 			fmt.Println("【警告】TUN 模式已开启，同时开启系统代理可能导致部分流量绕过 TUN 规则！")
+			fmt.Println("         建议只使用其中一种方式以获得最佳分流效果。")
 		}
 		a.enableSystemProxy(proxyAddr)
 		fmt.Println("系统代理已开启")
@@ -550,25 +555,9 @@ func (a *App) openDashboard() {
 	cmd.Start()
 }
 
-// ==================== 防崩溃自动重启监控（新增） ====================
-func (a *App) monitorMihomo() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if a.mihomoCmd == nil || a.mihomoCmd.Process == nil {
-			continue
-		}
-		if !a.isRunning(a.mihomoCmd) {
-			fmt.Println("检测到 mihomo 已崩溃 → 自动重启")
-			a.restartMihomo()
-		}
-	}
-}
-
 func (a *App) onExit() {
-	fmt.Println("正在退出...")
 	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
+		fmt.Println("关闭 mihomo...")
 		_ = a.mihomoCmd.Process.Kill()
 		_, _ = a.mihomoCmd.Process.Wait()
 	}
@@ -588,6 +577,7 @@ func (a *App) appDir() string {
 // ==================== 主入口 ====================
 func main() {
 	ensureSingleInstance()
+
 	if runtime.GOOS == "windows" && !isAdmin() {
 		fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
 		runAsAdmin()
