@@ -43,6 +43,49 @@ func ensureSingleInstance() {
 	}
 }
 
+// ==================== 检查是否以管理员权限运行 ====================
+func isAdmin() bool {
+	var sid *windows.SID
+	err := windows.AllocateAndInitializeSid(
+		&windows.SECURITY_NT_AUTHORITY,
+		2,
+		windows.SECURITY_BUILTIN_DOMAIN_RID,
+		windows.DOMAIN_ALIAS_RID_ADMINS,
+		0, 0, 0, 0, 0, 0,
+		&sid,
+	)
+	if err != nil {
+		return false
+	}
+	defer windows.FreeSid(sid)
+
+	token := windows.GetCurrentProcessToken()
+	member, err := token.IsMember(sid)
+	if err != nil {
+		return false
+	}
+	return member
+}
+
+// ==================== 以管理员权限重新启动自身（UAC 提示） ====================
+func runAsAdmin() {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Println("无法获取可执行文件路径:", err)
+		return
+	}
+
+	verbPtr, _ := windows.UTF16PtrFromString("runas")
+	exePtr, _ := windows.UTF16PtrFromString(exe)
+	cwdPtr, _ := windows.UTF16PtrFromString("")
+	argPtr, _ := windows.UTF16PtrFromString(strings.Join(os.Args[1:], " "))
+
+	err = windows.ShellExecute(0, verbPtr, exePtr, argPtr, cwdPtr, windows.SW_NORMAL)
+	if err != nil {
+		fmt.Println("请求管理员权限失败:", err)
+	}
+}
+
 // ==================== 主应用结构体 ====================
 type App struct {
 	mihomoCmd            *exec.Cmd
@@ -52,7 +95,7 @@ type App struct {
 	controllerAddr       string
 	secret               string
 	dashboardURL         string
-	currentMode          string // 当前代理模式（rule/global/direct）
+	currentMode          string
 }
 
 func NewApp() *App {
@@ -68,7 +111,7 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 配置加载 ====================
+// ==================== 配置加载（新增 TUN 配置读取） ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
@@ -112,7 +155,7 @@ func (a *App) loadConfig() {
 		}
 	}
 
-	// ==================== 新增：读取 TUN 配置 ====================
+	// TUN 配置读取
 	if tun, ok := cfg["tun"]; ok {
 		if tunMap, ok := tun.(map[string]interface{}); ok {
 			if enable, ok := tunMap["enable"].(bool); ok {
@@ -127,7 +170,6 @@ func (a *App) loadConfig() {
 		fmt.Println("config.yaml 中未找到 tun 配置，默认 TUN: false")
 		a.isTUNEnabled = false
 	}
-	// ========================================================
 
 	a.buildDashboardURL()
 	fmt.Printf("配置加载成功 → 端口: %s | 控制器: %s | Secret: %q | TUN: %v\n",
@@ -154,19 +196,15 @@ func (a *App) onReady() {
 	mOpen := systray.AddMenuItem("打开面板", "打开 Zashboard")
 	systray.AddSeparator()
 
-	// 代理模式
 	mMode := systray.AddMenuItem("出站模式", "切换代理模式")
 	systray.AddSeparator()
-	mRule := mMode.AddSubMenuItemCheckbox("规则模式", "Rule 模式", false)
-	mGlobal := mMode.AddSubMenuItemCheckbox("全局模式", "Global 模式", false)
-	mDirect := mMode.AddSubMenuItemCheckbox("直连模式", "Direct 模式", false)
+	mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
+	mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
+	mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
 
-	// 系统代理
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
-
-	// TUN
-	mTun := systray.AddMenuItemCheckbox("虚拟网卡 (TUN)", "切换 TUN 模式", false)
+	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled) // 初始状态
 	systray.AddSeparator()
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
@@ -175,9 +213,9 @@ func (a *App) onReady() {
 
 	a.updateProxyMenu(mProxy)
 
-	// 启动后同步状态（增加等待时间，让 mihomo 完全启动）
+	// 启动后同步（增加等待时间）
 	go func() {
-		time.Sleep(1800 * time.Millisecond) // 给 mihomo 启动留足够时间
+		time.Sleep(1800 * time.Millisecond)
 		a.syncTunStateWithRetry(mTun, 15)
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 12)
 	}()
@@ -209,7 +247,7 @@ func (a *App) onReady() {
 	go a.startMihomo()
 }
 
-// ==================== 代理模式相关（保持不变） ====================
+// ==================== 代理模式相关（已修复 fmt.Sprintf） ====================
 func (a *App) updateModeUI(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	mRule.Uncheck()
 	mGlobal.Uncheck()
@@ -340,7 +378,6 @@ func (a *App) fetchAndUpdateTunState(m *systray.MenuItem) bool {
 
 func (a *App) toggleTun(m *systray.MenuItem) {
 	newEnable := !a.isTUNEnabled
-
 	fmt.Printf("尝试切换 TUN 模式 → %v\n", newEnable)
 
 	if err := a.setTun(newEnable); err != nil {
@@ -349,19 +386,16 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 		return
 	}
 
-	// 关键修复：给 mihomo 时间应用 TUN 配置（创建/销毁虚拟网卡需要时间）
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond) // 给 mihomo 时间创建/销毁 TUN 接口
 
-	// 重新从内核获取真实状态
 	if a.fetchAndUpdateTunState(m) {
 		fmt.Printf("TUN 切换完成，当前实际状态: %v\n", a.isTUNEnabled)
 
-		// TUN 开启时自动关闭系统代理（强烈推荐互斥）
+		// TUN 开启时自动关闭系统代理
 		if a.isTUNEnabled && a.isSystemProxyEnabled {
 			fmt.Println("TUN 已开启，自动关闭系统代理")
 			a.disableSystemProxy()
 			a.isSystemProxyEnabled = false
-			// 注意：这里 mProxy 不在当前作用域，如果需要可把 mProxy 改为全局或通过其他方式更新
 		}
 	} else {
 		fmt.Println("警告：TUN 切换后无法获取最新状态")
@@ -392,7 +426,7 @@ func (a *App) setTun(enable bool) error {
 	return nil
 }
 
-// ==================== 系统代理（保持原样） ====================
+// ==================== 系统代理 ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -402,7 +436,6 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 }
 
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
-	// 可选增强：如果 TUN 已开启，阻止开启系统代理
 	if !a.isSystemProxyEnabled && a.isTUNEnabled {
 		fmt.Println("TUN 模式已开启，系统代理将被忽略")
 		return
@@ -424,9 +457,8 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 func (a *App) enableSystemProxy(proxyAddr string) {
 	fmt.Println("开启系统代理 →", proxyAddr)
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "-Command",
-			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyServer -Value "`+proxyAddr+`"; `+
-				`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 1`)
+		cmdStr := fmt.Sprintf(`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyServer -Value "%s"; Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 1`, proxyAddr)
+		cmd := exec.Command("powershell", "-Command", cmdStr)
 		a.hideWindow(cmd)
 		_ = cmd.Run()
 	}
@@ -435,8 +467,7 @@ func (a *App) enableSystemProxy(proxyAddr string) {
 func (a *App) disableSystemProxy() {
 	fmt.Println("关闭系统代理")
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("powershell", "-Command",
-			`Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
+		cmd := exec.Command("powershell", "-Command", `Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
 		a.hideWindow(cmd)
 		_ = cmd.Run()
 	}
@@ -451,7 +482,7 @@ func (a *App) hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== Mihomo 核心控制（保持原样） ====================
+// ==================== Mihomo 核心控制 ====================
 func (a *App) startMihomo() {
 	if a.isRunning(a.mihomoCmd) {
 		fmt.Println("mihomo 已在运行")
@@ -466,10 +497,7 @@ func (a *App) startMihomo() {
 
 func (a *App) startMihomoForce() {
 	baseDir := a.appDir()
-	exeName := "mihomo"
-	if runtime.GOOS == "windows" {
-		exeName = "mihomo.exe"
-	}
+	exeName := "mihomo.exe" // Windows 下固定 .exe
 	exePath := filepath.Join(baseDir, exeName)
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
@@ -555,9 +583,18 @@ func (a *App) appDir() string {
 	return filepath.Dir(exePath)
 }
 
-// ==================== 主入口 ====================
+// ==================== 主入口（新增管理员权限检查） ====================
 func main() {
 	ensureSingleInstance()
+
+	// 自动请求管理员权限
+	if runtime.GOOS == "windows" && !isAdmin() {
+		fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
+		runAsAdmin()
+		time.Sleep(1 * time.Second)
+		os.Exit(0)
+	}
+
 	app := NewApp()
 	systray.Run(app.onReady, app.onExit)
 }
