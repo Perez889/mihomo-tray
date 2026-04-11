@@ -67,7 +67,7 @@ func isAdmin() bool {
 	return member
 }
 
-// ==================== 以管理员权限重新启动自身（UAC 提示） ====================
+// ==================== 以管理员权限重新启动自身 ====================
 func runAsAdmin() {
 	exe, err := os.Executable()
 	if err != nil {
@@ -111,7 +111,7 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 配置加载（新增 TUN 配置读取） ====================
+// ==================== 配置加载 ====================
 func (a *App) loadConfig() {
 	baseDir := a.appDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
@@ -204,7 +204,7 @@ func (a *App) onReady() {
 
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
-	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled) // 初始状态
+	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
 	systray.AddSeparator()
 
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
@@ -213,7 +213,7 @@ func (a *App) onReady() {
 
 	a.updateProxyMenu(mProxy)
 
-	// 启动后同步（增加等待时间）
+	// 启动后同步状态
 	go func() {
 		time.Sleep(1800 * time.Millisecond)
 		a.syncTunStateWithRetry(mTun, 15)
@@ -247,7 +247,7 @@ func (a *App) onReady() {
 	go a.startMihomo()
 }
 
-// ==================== 代理模式相关（已修复 fmt.Sprintf） ====================
+// ==================== 代理模式相关 ====================
 func (a *App) updateModeUI(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	mRule.Uncheck()
 	mGlobal.Uncheck()
@@ -280,11 +280,10 @@ func (a *App) fetchAndUpdateModeState(mRule, mGlobal, mDirect *systray.MenuItem)
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return false
 	}
 	defer resp.Body.Close()
@@ -329,7 +328,7 @@ func (a *App) setMode(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	fmt.Printf("已切换到 %s 模式\n", strings.ToUpper(mode))
 }
 
-// ==================== TUN 相关（已优化） ====================
+// ==================== TUN 相关（允许同时开启） ====================
 func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 	for i := 0; i < maxRetries; i++ {
 		if a.fetchAndUpdateTunState(m) {
@@ -348,11 +347,10 @@ func (a *App) fetchAndUpdateTunState(m *systray.MenuItem) bool {
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return false
 	}
 	defer resp.Body.Close()
@@ -386,17 +384,11 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 		return
 	}
 
-	time.Sleep(1200 * time.Millisecond) // 给 mihomo 时间创建/销毁 TUN 接口
+	time.Sleep(1500 * time.Millisecond) // 给 mihomo 足够时间应用 TUN
 
 	if a.fetchAndUpdateTunState(m) {
 		fmt.Printf("TUN 切换完成，当前实际状态: %v\n", a.isTUNEnabled)
-
-		// TUN 开启时自动关闭系统代理
-		if a.isTUNEnabled && a.isSystemProxyEnabled {
-			fmt.Println("TUN 已开启，自动关闭系统代理")
-			a.disableSystemProxy()
-			a.isSystemProxyEnabled = false
-		}
+		// 这里不再强制关闭系统代理，允许同时开启
 	} else {
 		fmt.Println("警告：TUN 切换后无法获取最新状态")
 	}
@@ -426,7 +418,7 @@ func (a *App) setTun(enable bool) error {
 	return nil
 }
 
-// ==================== 系统代理 ====================
+// ==================== 系统代理（允许同时开启 + 警告） ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -436,15 +428,14 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 }
 
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
-	if !a.isSystemProxyEnabled && a.isTUNEnabled {
-		fmt.Println("TUN 模式已开启，系统代理将被忽略")
-		return
-	}
-
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
 
 	if a.isSystemProxyEnabled {
+		if a.isTUNEnabled {
+			fmt.Println("【警告】TUN 模式已开启，同时开启系统代理可能导致部分流量绕过 TUN 规则！")
+			fmt.Println("         建议只使用其中一种方式以获得最佳分流效果。")
+		}
 		a.enableSystemProxy(proxyAddr)
 		fmt.Println("系统代理已开启")
 	} else {
@@ -497,7 +488,7 @@ func (a *App) startMihomo() {
 
 func (a *App) startMihomoForce() {
 	baseDir := a.appDir()
-	exeName := "mihomo.exe" // Windows 下固定 .exe
+	exeName := "mihomo.exe"
 	exePath := filepath.Join(baseDir, exeName)
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
@@ -583,11 +574,10 @@ func (a *App) appDir() string {
 	return filepath.Dir(exePath)
 }
 
-// ==================== 主入口（新增管理员权限检查） ====================
+// ==================== 主入口 ====================
 func main() {
 	ensureSingleInstance()
 
-	// 自动请求管理员权限
 	if runtime.GOOS == "windows" && !isAdmin() {
 		fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
 		runAsAdmin()
