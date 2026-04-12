@@ -186,11 +186,17 @@ func (a *App) loadConfig() {
             a.controllerAddr = strings.TrimSpace(ctrlStr)
         }
     }
-
     // secret
     if s, ok := cfg["secret"]; ok {
-        if secretStr, ok := s.(string); ok {
-            a.secret = strings.TrimSpace(secretStr)
+        switch v := s.(type) {
+        case string:
+            a.secret = strings.TrimSpace(v)
+        case int:
+            a.secret = strconv.Itoa(v)
+        case float64:
+            a.secret = strconv.Itoa(int(v))
+        default:
+    // 保持默认空字符串
         }
     }
 
