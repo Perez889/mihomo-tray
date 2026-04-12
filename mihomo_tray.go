@@ -23,7 +23,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.2.3"
+var Version = "1.2.6"
 
 //go:embed icon/tray.ico
 var trayIcon []byte
