@@ -116,16 +116,24 @@ func NewApp() *App {
 	return app
 }
 
-// ==================== 日志初始化 ====================
+// ==================== 日志初始化（退出后保留最后一次日志） ====================
 func (a *App) initLogger() {
 	baseDir := a.appDir()
 	logPath := filepath.Join(baseDir, "net-tray.log")
+
+	// 启动时先删除旧日志（保留最后一次）
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("删除旧日志文件失败: %v\n", err)
+	}
+
+	// 创建新的日志文件
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("日志文件创建失败: %v，使用标准输出\n", err)
 		a.logger = log.New(os.Stdout, "[NetTray] ", log.LstdFlags)
 		return
 	}
+
 	a.logger = log.New(f, "[NetTray] ", log.LstdFlags)
 	a.logger.Println("=== NetTray 启动 ===")
 	a.logger.Printf("版本: %s | 目录: %s", Version, baseDir)
