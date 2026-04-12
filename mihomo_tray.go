@@ -25,7 +25,7 @@ import (
 // ==================== 版本号 ====================
 var Version = "1.2.3"
 
-//go:embed icon/logo.ico
+//go:embed icon/tray.ico
 var trayIcon []byte
 
 // ==================== 单实例控制 ====================
