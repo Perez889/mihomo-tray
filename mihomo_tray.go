@@ -23,7 +23,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.2.3"
+var Version = "1.2.9"
 
 //go:embed icon/logo.ico
 var trayIcon []byte
@@ -111,12 +111,12 @@ func NewApp() *App {
 		currentMode:          "",
 	}
 	app.initLogger()
-	app.checkWintunDLL() // 启动时检查 wintun.dll
+	app.checkWintunDLL()
 	app.loadConfig()
 	return app
 }
 
-// ==================== 日志初始化（退出后保留最后一次日志） ====================
+// ==================== 日志初始化（启动时删除旧日志，退出保留最后一次） ====================
 func (a *App) initLogger() {
 	baseDir := a.appDir()
 	logPath := filepath.Join(baseDir, "net-tray.log")
@@ -126,14 +126,12 @@ func (a *App) initLogger() {
 		fmt.Printf("删除旧日志文件失败: %v\n", err)
 	}
 
-	// 创建新的日志文件
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("日志文件创建失败: %v，使用标准输出\n", err)
 		a.logger = log.New(os.Stdout, "[NetTray] ", log.LstdFlags)
 		return
 	}
-
 	a.logger = log.New(f, "[NetTray] ", log.LstdFlags)
 	a.logger.Println("=== NetTray 启动 ===")
 	a.logger.Printf("版本: %s | 目录: %s", Version, baseDir)
@@ -151,17 +149,16 @@ func (a *App) logf(format string, args ...interface{}) {
 	}
 }
 
-// ==================== 检查 wintun.dll（核心新增） ====================
+// ==================== 检查 wintun.dll ====================
 func (a *App) checkWintunDLL() {
 	baseDir := a.appDir()
 	dllPath := filepath.Join(baseDir, "wintun.dll")
-
 	if _, err := os.Stat(dllPath); os.IsNotExist(err) {
 		a.log("=================================================================")
 		a.log("【严重警告】未检测到 wintun.dll 文件！")
 		a.log("TUN 模式将无法正常工作！")
 		a.log("请将 wintun.dll（amd64 版本）放到以下目录：")
-		a.log("   " + baseDir)
+		a.log(" " + baseDir)
 		a.log("下载地址: https://www.wintun.net/")
 		a.log("=================================================================")
 	} else {
@@ -179,7 +176,6 @@ func (a *App) loadConfig() {
 		a.buildDashboardURL()
 		return
 	}
-
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		a.log("警告：解析 config.yaml 失败，使用默认值")
@@ -257,7 +253,6 @@ func (a *App) loadConfig() {
 		a.mixedPort, a.controllerAddr, a.secret, a.isTUNEnabled, a.externalUIName)
 }
 
-// ==================== 构建 Dashboard URL ====================
 func (a *App) buildDashboardURL() {
 	base := fmt.Sprintf("http://%s/ui", a.controllerAddr)
 	if a.externalUIName != "" {
@@ -285,7 +280,7 @@ func (a *App) buildDashboardURL() {
 	a.log("未检测到 external-ui 配置，使用默认 zashboard")
 }
 
-// ==================== UI 初始化 ====================
+// ==================== UI 初始化（已修复出站模式勾选 + 添加分割线） ====================
 func (a *App) onReady() {
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(trayIcon)
@@ -296,26 +291,37 @@ func (a *App) onReady() {
 
 	mOpen := systray.AddMenuItem("打开面板", "打开 Dashboard")
 	systray.AddSeparator()
+
 	mMode := systray.AddMenuItem("出站模式", "切换代理模式")
 	systray.AddSeparator()
+
 	mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
 	mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
 	mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
+
+	// 出站模式子菜单添加分割线（更清晰）
+	systray.AddSeparator()
+
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
+
 	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
 	systray.AddSeparator()
+
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	systray.AddSeparator()
+
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
 	a.updateProxyMenu(mProxy)
 
-	// 启动后同步状态（增加等待时间，让 TUN 有足够时间初始化）
+	// 启动后同步状态（重点修复出站模式勾选问题）
 	go func() {
-		time.Sleep(3800 * time.Millisecond)
+		time.Sleep(4800 * time.Millisecond) // 增加等待时间，确保菜单项初始化完成
+		a.log("开始同步出站模式和 TUN 状态...")
+		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 25) // 增加重试次数
 		a.syncTunStateWithRetry(mTun, 30)
-		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 15)
+		a.log("初始状态同步完成")
 	}()
 
 	go func() {
@@ -345,7 +351,7 @@ func (a *App) onReady() {
 	go a.startMihomo()
 }
 
-// ==================== 代理模式相关 ====================
+// ==================== 代理模式相关（保持不变） ====================
 func (a *App) updateModeUI(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	mRule.Uncheck()
 	mGlobal.Uncheck()
@@ -430,7 +436,7 @@ func (a *App) setMode(mode string, mRule, mGlobal, mDirect *systray.MenuItem) {
 	a.logf("已切换到 %s 模式", strings.ToUpper(mode))
 }
 
-// ==================== TUN 相关（已加强） ====================
+// ==================== TUN 相关（保持不变） ====================
 func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 	a.log("开始同步 TUN 状态...")
 	for i := 0; i < maxRetries; i++ {
@@ -443,9 +449,9 @@ func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 	a.log("=================================================================")
 	a.log("【警告】多次尝试后仍无法同步 TUN 状态")
 	a.log("可能原因：")
-	a.log("  1. wintun.dll 未正确放置（必须是 amd64 版本）")
-	a.log("  2. TUN 初始化失败（驱动冲突、权限不足等）")
-	a.log("  3. mihomo 启动过慢")
+	a.log(" 1. wintun.dll 未正确放置（必须是 amd64 版本）")
+	a.log(" 2. TUN 初始化失败（驱动冲突、权限不足等）")
+	a.log(" 3. mihomo 启动过慢")
 	a.log("建议：确认 wintun.dll 已放在程序目录，并以管理员权限运行 NetTray")
 	a.log("=================================================================")
 }
@@ -453,7 +459,6 @@ func (a *App) syncTunStateWithRetry(m *systray.MenuItem, maxRetries int) {
 func (a *App) fetchAndUpdateTunState(m *systray.MenuItem) bool {
 	a.tunMutex.Lock()
 	defer a.tunMutex.Unlock()
-
 	url := fmt.Sprintf("http://%s/configs", a.controllerAddr)
 	req, _ := http.NewRequest("GET", url, nil)
 	if a.secret != "" {
@@ -498,7 +503,6 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 		m.Uncheck()
 	}
 	a.tunMutex.Unlock()
-
 	a.logf("尝试切换 TUN 模式 → %v", newEnable)
 	go a.asyncToggleTun(m, newEnable)
 }
@@ -512,7 +516,6 @@ func (a *App) asyncToggleTun(m *systray.MenuItem, expectedState bool) {
 		a.syncTunState(m)
 		return
 	}
-
 	for i := 0; i < 4; i++ {
 		time.Sleep(time.Duration(i*220+180) * time.Millisecond)
 		if a.verifyTunState(expectedState, m) {
@@ -550,21 +553,19 @@ func (a *App) setTun(enable bool) error {
 	if a.secret != "" {
 		req.Header.Set("Authorization", "Bearer "+a.secret)
 	}
-
 	client := &http.Client{Timeout: 6 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
 	}
 	return nil
 }
 
-// ==================== 系统代理 ====================
+// ==================== 系统代理（保持不变） ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -576,7 +577,6 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
-
 	if a.isSystemProxyEnabled {
 		if !a.isPortOpen("127.0.0.1:" + a.mixedPort) {
 			a.log("检测到 mihomo 未运行，自动启动...")
@@ -594,18 +594,15 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 				return
 			}
 		}
-
 		if a.isTUNEnabled {
 			a.log("【警告】TUN 模式已开启，同时开启系统代理可能导致部分流量绕过 TUN 规则！建议只使用其中一种方式")
 		}
-
 		a.enableSystemProxy(proxyAddr)
 		a.log("系统代理已开启")
 	} else {
 		a.disableSystemProxy()
 		a.log("系统代理已关闭")
 	}
-
 	a.updateProxyMenu(m)
 }
 
@@ -637,7 +634,7 @@ func (a *App) hideWindow(cmd *exec.Cmd) {
 	}
 }
 
-// ==================== Mihomo 核心控制 ====================
+// ==================== Mihomo 核心控制（保持不变） ====================
 func (a *App) startMihomo() {
 	if a.isRunning(a.mihomoCmd) {
 		a.log("mihomo 已在运行")
@@ -654,18 +651,15 @@ func (a *App) startMihomoForce() {
 	baseDir := a.appDir()
 	exeName := "mihomo.exe"
 	exePath := filepath.Join(baseDir, exeName)
-
 	cmd := exec.Command(exePath, "-d", ".")
 	cmd.Dir = baseDir
 	a.hideWindow(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Start(); err != nil {
 		a.logf("启动失败: %v", err)
 		return
 	}
-
 	a.mihomoCmd = cmd
 	a.log("mihomo 启动成功")
 }
@@ -725,24 +719,19 @@ func (a *App) openDashboard() {
 
 func (a *App) onExit() {
 	a.log("正在退出 NetTray...")
-
 	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
 		a.log("关闭 mihomo...")
 		_ = a.mihomoCmd.Process.Kill()
 		_, _ = a.mihomoCmd.Process.Wait()
 	}
-
 	a.disableSystemProxy()
-
 	if a.isTUNEnabled {
 		a.log("尝试关闭 TUN 模式...")
 		_ = a.setTun(false)
 	}
-
 	if singleInstanceMutex != 0 {
 		windows.CloseHandle(singleInstanceMutex)
 	}
-
 	a.log("NetTray 已安全退出")
 }
 
@@ -758,14 +747,12 @@ func (a *App) appDir() string {
 // ==================== 主入口 ====================
 func main() {
 	ensureSingleInstance()
-
 	if runtime.GOOS == "windows" && !isAdmin() {
 		fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
 		runAsAdmin()
 		time.Sleep(1 * time.Second)
 		os.Exit(0)
 	}
-
 	app := NewApp()
 	systray.Run(app.onReady, app.onExit)
 }
