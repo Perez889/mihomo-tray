@@ -111,7 +111,6 @@ func NewApp() *App {
 		currentMode:          "",
 	}
 	app.initLogger()
-	app.checkWintunDLL() // 启动时检查 wintun.dll
 	app.loadConfig()
 	return app
 }
@@ -148,24 +147,6 @@ func (a *App) log(msg string) {
 func (a *App) logf(format string, args ...interface{}) {
 	if a.logger != nil {
 		a.logger.Printf(format, args...)
-	}
-}
-
-// ==================== 检查 wintun.dll（核心新增） ====================
-func (a *App) checkWintunDLL() {
-	baseDir := a.appDir()
-	dllPath := filepath.Join(baseDir, "wintun.dll")
-
-	if _, err := os.Stat(dllPath); os.IsNotExist(err) {
-		a.log("=================================================================")
-		a.log("【严重警告】未检测到 wintun.dll 文件！")
-		a.log("TUN 模式将无法正常工作！")
-		a.log("请将 wintun.dll（amd64 版本）放到以下目录：")
-		a.log("   " + baseDir)
-		a.log("下载地址: https://www.wintun.net/")
-		a.log("=================================================================")
-	} else {
-		a.logf("已检测到 wintun.dll → %s", dllPath)
 	}
 }
 
@@ -313,7 +294,7 @@ func (a *App) onReady() {
 
 	// 启动后同步状态（增加等待时间，让 TUN 有足够时间初始化）
 	go func() {
-		time.Sleep(3800 * time.Millisecond)
+		time.Sleep(5500 * time.Millisecond)
 		a.syncTunStateWithRetry(mTun, 30)
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 15)
 	}()
