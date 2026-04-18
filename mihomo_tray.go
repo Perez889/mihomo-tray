@@ -26,7 +26,7 @@ import (
 var Version = "1.2.7"
 
 // ==================== 图标嵌入 ====================
-//go:embed icon/tary.ico
+//go:embed icon/tray.ico
 var trayDefaultIcon []byte
 
 //go:embed icon/mihomo_proxy.ico
