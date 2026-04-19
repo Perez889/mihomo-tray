@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -23,7 +24,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.2.7"
+var Version = "1.2.8" // 已升级，包含优雅关闭修复
 
 // ==================== 图标嵌入 ====================
 //go:embed icon/tray.ico
@@ -126,7 +127,6 @@ func NewApp() *App {
 		secret:               "",
 		currentMode:          "",
 
-		// 初始化图标
 		iconDefault: trayDefaultIcon,
 		iconProxy:   trayProxyIcon,
 		iconTun:     trayTunIcon,
@@ -286,10 +286,8 @@ func (a *App) buildDashboardURL() {
 // ==================== 更新托盘图标（核心新增函数） ====================
 func (a *App) updateTrayIcon() {
 	var iconToUse []byte
-
 	proxyOn := a.isSystemProxyEnabled
 	tunOn := a.isTUNEnabled
-
 	switch {
 	case proxyOn && tunOn:
 		iconToUse = a.iconAll
@@ -300,7 +298,6 @@ func (a *App) updateTrayIcon() {
 	default:
 		iconToUse = a.iconDefault
 	}
-
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(iconToUse)
 	} else {
@@ -312,31 +309,22 @@ func (a *App) updateTrayIcon() {
 func (a *App) onReady() {
 	// 设置初始图标
 	a.updateTrayIcon()
-
 	systray.SetTooltip("Mihomo Lite\n轻量托盘工具")
-
 	mOpen := systray.AddMenuItem("打开面板", "打开 Dashboard")
 	systray.AddSeparator()
-
 	mMode := systray.AddMenuItem("出站模式", "切换代理模式")
 	systray.AddSeparator()
 	mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
 	mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
 	mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
-
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
-
 	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
 	systray.AddSeparator()
-
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	systray.AddSeparator()
-
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
-
 	a.updateProxyMenu(mProxy)
-
 	// 启动后同步状态（自动等待 mihomo ready）
 	go func() {
 		for {
@@ -349,7 +337,6 @@ func (a *App) onReady() {
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 15)
 		a.updateTrayIcon() // 同步完成后刷新一次图标
 	}()
-
 	go func() {
 		for {
 			select {
@@ -373,7 +360,6 @@ func (a *App) onReady() {
 			}
 		}
 	}()
-
 	go a.startMihomo()
 }
 
@@ -493,7 +479,6 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 		m.Uncheck()
 	}
 	a.tunMutex.Unlock()
-
 	a.logf("尝试切换 TUN 模式 → %v", newEnable)
 	a.updateTrayIcon() // 立即更新图标
 	go a.asyncToggleTun(newEnable)
@@ -547,7 +532,6 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
-
 	if a.isSystemProxyEnabled {
 		if !a.isPortOpen("127.0.0.1:" + a.mixedPort) {
 			a.log("检测到 mihomo 未运行，自动启动...")
@@ -575,7 +559,6 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 		a.disableSystemProxy()
 		a.log("系统代理已关闭")
 	}
-
 	a.updateProxyMenu(m)
 	a.updateTrayIcon() // 状态改变后更新图标
 }
@@ -691,22 +674,37 @@ func (a *App) openDashboard() {
 	a.logf("已打开面板: %s", a.dashboardURL)
 }
 
-func (a *App) onExit() {
-	a.log("正在退出 NetTray...")
-	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
-		a.log("关闭 mihomo...")
-		_ = a.mihomoCmd.Process.Kill()
-		_, _ = a.mihomoCmd.Process.Wait()
-	}
+// ==================== 新增：优雅关闭（解决关机后代理残留） ====================
+func (a *App) gracefulShutdown() {
+	a.log("执行优雅关闭流程（关机/重启/退出）...")
+
+	// 最优先关闭系统代理，防止残留
 	a.disableSystemProxy()
+
+	// 尝试关闭 TUN
 	if a.isTUNEnabled {
 		a.log("尝试关闭 TUN 模式...")
 		_ = a.setTun(false)
 	}
+
+	// 关闭 mihomo 进程
+	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
+		a.log("关闭 mihomo 进程...")
+		_ = a.mihomoCmd.Process.Kill()
+		_, _ = a.mihomoCmd.Process.Wait()
+	}
+
 	if singleInstanceMutex != 0 {
 		windows.CloseHandle(singleInstanceMutex)
 	}
-	a.log("NetTray 已安全退出")
+
+	a.log("优雅关闭完成")
+}
+
+// 修改 onExit，让正常退出也走统一流程
+func (a *App) onExit() {
+	a.log("systray onExit 被调用（正常退出菜单）")
+	a.gracefulShutdown()
 }
 
 // ==================== 目录 ====================
@@ -718,7 +716,7 @@ func (a *App) appDir() string {
 	return filepath.Dir(exePath)
 }
 
-// ==================== 主入口 ====================
+// ==================== 主入口（关键修改） ====================
 func main() {
 	ensureSingleInstance()
 	if runtime.GOOS == "windows" && !isAdmin() {
@@ -727,6 +725,18 @@ func main() {
 		time.Sleep(1 * time.Second)
 		os.Exit(0)
 	}
+
 	app := NewApp()
+
+	// 新增：监听系统退出信号（关机、重启、Ctrl+C 等）
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+		<-sigCh
+		app.log("收到系统退出信号，开始优雅关闭...")
+		app.gracefulShutdown()
+		os.Exit(0)
+	}()
+
 	systray.Run(app.onReady, app.onExit)
 }
