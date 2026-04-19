@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -24,7 +23,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.3.0"
+var Version = "1.2.7"
 
 // ==================== 图标嵌入 ====================
 //go:embed icon/tray.ico
@@ -118,8 +117,6 @@ type App struct {
 	iconAll     []byte
 }
 
-var appInstance *App
-
 func NewApp() *App {
 	app := &App{
 		isSystemProxyEnabled: false,
@@ -129,6 +126,7 @@ func NewApp() *App {
 		secret:               "",
 		currentMode:          "",
 
+		// 初始化图标
 		iconDefault: trayDefaultIcon,
 		iconProxy:   trayProxyIcon,
 		iconTun:     trayTunIcon,
@@ -136,43 +134,18 @@ func NewApp() *App {
 	}
 	app.initLogger()
 	app.loadConfig()
-	app.cleanupResidualProxy() // 启动时清理上次关机残留
 	return app
 }
 
-// ==================== 启动时清理上次关机残留的系统代理 ====================
-func (a *App) cleanupResidualProxy() {
-	proxyStateFile := filepath.Join(a.appDir(), ".proxy_state")
-	data, err := os.ReadFile(proxyStateFile)
-	if err != nil {
-		return // 无残留记录
-	}
-
-	if string(data) == "enabled" {
-		a.log("检测到上次关机时系统代理处于开启状态，正在自动清理残留...")
-		a.disableSystemProxy()
-		_ = os.Remove(proxyStateFile)
-		a.log("系统代理残留已清理完成")
-	}
-}
-
-// ==================== 记录当前代理状态 ====================
-func (a *App) saveProxyState(enabled bool) {
-	proxyStateFile := filepath.Join(a.appDir(), ".proxy_state")
-	state := "disabled"
-	if enabled {
-		state = "enabled"
-	}
-	_ = os.WriteFile(proxyStateFile, []byte(state), 0666)
-}
-
-// ==================== 日志初始化 ====================
+// ==================== 日志初始化（退出后保留最后一次日志） ====================
 func (a *App) initLogger() {
 	baseDir := a.appDir()
 	logPath := filepath.Join(baseDir, "net-tray.log")
+	// 启动时先删除旧日志（保留最后一次）
 	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
 		fmt.Printf("删除旧日志文件失败: %v\n", err)
 	}
+	// 创建新的日志文件
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("日志文件创建失败: %v，使用标准输出\n", err)
@@ -238,6 +211,8 @@ func (a *App) loadConfig() {
 			a.secret = strconv.Itoa(v)
 		case float64:
 			a.secret = strconv.Itoa(int(v))
+		default:
+			// 保持默认空字符串
 		}
 	}
 	// external-ui
@@ -252,6 +227,12 @@ func (a *App) loadConfig() {
 		if nameStr, ok := name.(string); ok && nameStr != "" {
 			a.externalUIName = strings.TrimSpace(nameStr)
 			a.logf("读取 external-ui-name: %s", a.externalUIName)
+		}
+	}
+	// external-ui-url
+	if url, ok := cfg["external-ui-url"]; ok {
+		if urlStr, ok := url.(string); ok && urlStr != "" {
+			a.logf("检测到 external-ui-url: %s", urlStr)
 		}
 	}
 	// TUN 配置
@@ -302,11 +283,13 @@ func (a *App) buildDashboardURL() {
 	a.log("未检测到 external-ui 配置，使用默认 zashboard")
 }
 
-// ==================== 更新托盘图标 ====================
+// ==================== 更新托盘图标（核心新增函数） ====================
 func (a *App) updateTrayIcon() {
 	var iconToUse []byte
+
 	proxyOn := a.isSystemProxyEnabled
 	tunOn := a.isTUNEnabled
+
 	switch {
 	case proxyOn && tunOn:
 		iconToUse = a.iconAll
@@ -317,6 +300,7 @@ func (a *App) updateTrayIcon() {
 	default:
 		iconToUse = a.iconDefault
 	}
+
 	if runtime.GOOS == "windows" {
 		systray.SetIcon(iconToUse)
 	} else {
@@ -326,26 +310,34 @@ func (a *App) updateTrayIcon() {
 
 // ==================== UI 初始化 ====================
 func (a *App) onReady() {
+	// 设置初始图标
 	a.updateTrayIcon()
+
 	systray.SetTooltip("Mihomo Lite\n轻量托盘工具")
 
 	mOpen := systray.AddMenuItem("打开面板", "打开 Dashboard")
 	systray.AddSeparator()
+
 	mMode := systray.AddMenuItem("出站模式", "切换代理模式")
 	systray.AddSeparator()
 	mRule := mMode.AddSubMenuItemCheckbox("规则", "Rule 模式", false)
 	mGlobal := mMode.AddSubMenuItemCheckbox("全局", "Global 模式", false)
 	mDirect := mMode.AddSubMenuItemCheckbox("直连", "Direct 模式", false)
+
 	mProxy := systray.AddMenuItemCheckbox("系统代理", "点击切换系统代理开关", false)
 	systray.AddSeparator()
+
 	mTun := systray.AddMenuItemCheckbox("虚拟网卡", "切换 TUN 模式", a.isTUNEnabled)
 	systray.AddSeparator()
+
 	mRestart := systray.AddMenuItem("重启内核", "重启 Mihomo")
 	systray.AddSeparator()
+
 	mQuit := systray.AddMenuItem("退出应用", "退出并关闭 mihomo")
 
 	a.updateProxyMenu(mProxy)
 
+	// 启动后同步状态（自动等待 mihomo ready）
 	go func() {
 		for {
 			if a.isPortOpen(a.controllerAddr) {
@@ -355,7 +347,7 @@ func (a *App) onReady() {
 		}
 		a.syncTunStateWithRetry(mTun, 30)
 		a.syncModeStateWithRetry(mRule, mGlobal, mDirect, 15)
-		a.updateTrayIcon()
+		a.updateTrayIcon() // 同步完成后刷新一次图标
 	}()
 
 	go func() {
@@ -501,8 +493,9 @@ func (a *App) toggleTun(m *systray.MenuItem) {
 		m.Uncheck()
 	}
 	a.tunMutex.Unlock()
+
 	a.logf("尝试切换 TUN 模式 → %v", newEnable)
-	a.updateTrayIcon()
+	a.updateTrayIcon() // 立即更新图标
 	go a.asyncToggleTun(newEnable)
 }
 
@@ -512,11 +505,11 @@ func (a *App) asyncToggleTun(expectedState bool) {
 		a.tunMutex.Lock()
 		a.isTUNEnabled = !expectedState
 		a.tunMutex.Unlock()
-		a.updateTrayIcon()
+		a.updateTrayIcon() // 失败后恢复图标
 		return
 	}
 	a.logf("TUN 切换完成，当前实际状态: %v", expectedState)
-	a.updateTrayIcon()
+	a.updateTrayIcon() // 成功后更新图标
 }
 
 func (a *App) setTun(enable bool) error {
@@ -542,7 +535,7 @@ func (a *App) setTun(enable bool) error {
 	return nil
 }
 
-// ==================== 系统代理（重要：增加状态记录） ====================
+// ==================== 系统代理 ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -554,6 +547,7 @@ func (a *App) updateProxyMenu(m *systray.MenuItem) {
 func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	a.isSystemProxyEnabled = !a.isSystemProxyEnabled
 	proxyAddr := "127.0.0.1:" + a.mixedPort
+
 	if a.isSystemProxyEnabled {
 		if !a.isPortOpen("127.0.0.1:" + a.mixedPort) {
 			a.log("检测到 mihomo 未运行，自动启动...")
@@ -581,9 +575,9 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 		a.disableSystemProxy()
 		a.log("系统代理已关闭")
 	}
+
 	a.updateProxyMenu(m)
-	a.updateTrayIcon()
-	a.saveProxyState(a.isSystemProxyEnabled) // 记录当前状态
+	a.updateTrayIcon() // 状态改变后更新图标
 }
 
 func (a *App) enableSystemProxy(proxyAddr string) {
@@ -697,34 +691,22 @@ func (a *App) openDashboard() {
 	a.logf("已打开面板: %s", a.dashboardURL)
 }
 
-// ==================== 优雅关闭 ====================
-func (a *App) gracefulShutdown() {
-	a.log("执行优雅关闭流程（关机/重启/退出）...")
-
+func (a *App) onExit() {
+	a.log("正在退出 NetTray...")
+	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
+		a.log("关闭 mihomo...")
+		_ = a.mihomoCmd.Process.Kill()
+		_, _ = a.mihomoCmd.Process.Wait()
+	}
 	a.disableSystemProxy()
-	a.saveProxyState(false) // 记录为已关闭
-
 	if a.isTUNEnabled {
 		a.log("尝试关闭 TUN 模式...")
 		_ = a.setTun(false)
 	}
-
-	if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
-		a.log("关闭 mihomo 进程...")
-		_ = a.mihomoCmd.Process.Kill()
-		_, _ = a.mihomoCmd.Process.Wait()
-	}
-
 	if singleInstanceMutex != 0 {
 		windows.CloseHandle(singleInstanceMutex)
 	}
-
-	a.log("优雅关闭完成")
-}
-
-func (a *App) onExit() {
-	a.log("systray onExit 被调用")
-	a.gracefulShutdown()
+	a.log("NetTray 已安全退出")
 }
 
 // ==================== 目录 ====================
@@ -745,19 +727,6 @@ func main() {
 		time.Sleep(1 * time.Second)
 		os.Exit(0)
 	}
-
 	app := NewApp()
-	appInstance = app
-
-	// 信号监听作为补充
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-		<-sigCh
-		app.log("收到退出信号，开始优雅关闭...")
-		app.gracefulShutdown()
-		os.Exit(0)
-	}()
-
 	systray.Run(app.onReady, app.onExit)
 }
