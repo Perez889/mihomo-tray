@@ -24,7 +24,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.2.9"
+var Version = "1.3.0"
 
 // ==================== 图标嵌入 ====================
 //go:embed icon/tray.ico
@@ -118,7 +118,7 @@ type App struct {
 	iconAll     []byte
 }
 
-var appInstance *App // 用于关机事件处理器
+var appInstance *App
 
 func NewApp() *App {
 	app := &App{
@@ -136,7 +136,34 @@ func NewApp() *App {
 	}
 	app.initLogger()
 	app.loadConfig()
+	app.cleanupResidualProxy() // 启动时清理上次关机残留
 	return app
+}
+
+// ==================== 启动时清理上次关机残留的系统代理 ====================
+func (a *App) cleanupResidualProxy() {
+	proxyStateFile := filepath.Join(a.appDir(), ".proxy_state")
+	data, err := os.ReadFile(proxyStateFile)
+	if err != nil {
+		return // 无残留记录
+	}
+
+	if string(data) == "enabled" {
+		a.log("检测到上次关机时系统代理处于开启状态，正在自动清理残留...")
+		a.disableSystemProxy()
+		_ = os.Remove(proxyStateFile)
+		a.log("系统代理残留已清理完成")
+	}
+}
+
+// ==================== 记录当前代理状态 ====================
+func (a *App) saveProxyState(enabled bool) {
+	proxyStateFile := filepath.Join(a.appDir(), ".proxy_state")
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	_ = os.WriteFile(proxyStateFile, []byte(state), 0666)
 }
 
 // ==================== 日志初始化 ====================
@@ -319,7 +346,6 @@ func (a *App) onReady() {
 
 	a.updateProxyMenu(mProxy)
 
-	// 启动后同步状态
 	go func() {
 		for {
 			if a.isPortOpen(a.controllerAddr) {
@@ -516,7 +542,7 @@ func (a *App) setTun(enable bool) error {
 	return nil
 }
 
-// ==================== 系统代理 ====================
+// ==================== 系统代理（重要：增加状态记录） ====================
 func (a *App) updateProxyMenu(m *systray.MenuItem) {
 	if a.isSystemProxyEnabled {
 		m.Check()
@@ -557,6 +583,7 @@ func (a *App) toggleSystemProxy(m *systray.MenuItem) {
 	}
 	a.updateProxyMenu(m)
 	a.updateTrayIcon()
+	a.saveProxyState(a.isSystemProxyEnabled) // 记录当前状态
 }
 
 func (a *App) enableSystemProxy(proxyAddr string) {
@@ -672,10 +699,10 @@ func (a *App) openDashboard() {
 
 // ==================== 优雅关闭 ====================
 func (a *App) gracefulShutdown() {
-	a.log("执行优雅关闭流程（关机/重启/注销）...")
+	a.log("执行优雅关闭流程（关机/重启/退出）...")
 
-	// 最优先关闭系统代理
 	a.disableSystemProxy()
+	a.saveProxyState(false) // 记录为已关闭
 
 	if a.isTUNEnabled {
 		a.log("尝试关闭 TUN 模式...")
@@ -700,19 +727,6 @@ func (a *App) onExit() {
 	a.gracefulShutdown()
 }
 
-// ==================== Windows 关机事件处理器 ====================
-func consoleCtrlHandler(ctrlType uint32) uintptr {
-	switch ctrlType {
-	case windows.CTRL_SHUTDOWN_EVENT, windows.CTRL_LOGOFF_EVENT, windows.CTRL_CLOSE_EVENT:
-		if appInstance != nil {
-			appInstance.log("检测到 Windows 关机/注销/关闭事件")
-			appInstance.gracefulShutdown()
-			time.Sleep(800 * time.Millisecond)
-		}
-	}
-	return 1
-}
-
 // ==================== 目录 ====================
 func (a *App) appDir() string {
 	exePath, err := os.Executable()
@@ -734,11 +748,6 @@ func main() {
 
 	app := NewApp()
 	appInstance = app
-
-	// 注册 Windows 控制台控制处理器（关键：处理关机、重启、注销）
-	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	setCtrlHandler := kernel32.NewProc("SetConsoleCtrlHandler")
-	setCtrlHandler.Call(syscall.NewCallback(consoleCtrlHandler), 1)
 
 	// 信号监听作为补充
 	go func() {
