@@ -17,7 +17,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/getlantern/systray"
 	"golang.org/x/sys/windows"
@@ -119,7 +118,7 @@ type App struct {
 	iconAll     []byte
 }
 
-var appInstance *App // 用于关机事件处理器访问 App
+var appInstance *App // 用于关机事件处理器
 
 func NewApp() *App {
 	app := &App{
@@ -671,7 +670,7 @@ func (a *App) openDashboard() {
 	a.logf("已打开面板: %s", a.dashboardURL)
 }
 
-// ==================== 优雅关闭（核心修复） ====================
+// ==================== 优雅关闭 ====================
 func (a *App) gracefulShutdown() {
 	a.log("执行优雅关闭流程（关机/重启/注销）...")
 
@@ -708,7 +707,7 @@ func consoleCtrlHandler(ctrlType uint32) uintptr {
 		if appInstance != nil {
 			appInstance.log("检测到 Windows 关机/注销/关闭事件")
 			appInstance.gracefulShutdown()
-			time.Sleep(800 * time.Millisecond) // 给清理一点时间
+			time.Sleep(800 * time.Millisecond)
 		}
 	}
 	return 1
@@ -734,9 +733,9 @@ func main() {
 	}
 
 	app := NewApp()
-	appInstance = app // 供关机处理器使用
+	appInstance = app
 
-	// 注册 Windows 控制台控制处理器（对关机、重启、注销更有效）
+	// 注册 Windows 控制台控制处理器（关键：处理关机、重启、注销）
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 	setCtrlHandler := kernel32.NewProc("SetConsoleCtrlHandler")
 	setCtrlHandler.Call(syscall.NewCallback(consoleCtrlHandler), 1)
