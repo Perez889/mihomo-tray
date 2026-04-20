@@ -727,11 +727,7 @@ func main() {
         time.Sleep(1 * time.Second)
         os.Exit(0)
     }
-
     app := NewApp()
-
-    // ⭐⭐ 安装关机 Hook（关键） ⭐⭐
     app.installShutdownHook()
-
     systray.Run(app.onReady, app.onExit)
 }
