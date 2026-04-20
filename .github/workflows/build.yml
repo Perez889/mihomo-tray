@@ -22,13 +22,31 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # ============================
+      # 1. Checkout
+      # ============================
       - uses: actions/checkout@v4
 
+      # ============================
+      # 2. 清理 Go 缓存（关键）
+      # ============================
+      - name: Clean Go build cache
+        shell: pwsh
+        run: |
+          go clean -cache -modcache -i -r
+          Write-Host "Go 缓存已清理"
+
+      # ============================
+      # 3. 安装 Go
+      # ============================
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
+      # ============================
+      # 4. 初始化 go.mod
+      # ============================
       - name: Initialize Go module and install dependencies
         shell: pwsh
         run: |
@@ -38,29 +56,51 @@ jobs:
           
           go get github.com/getlantern/systray
           go get gopkg.in/yaml.v3
+          go get golang.org/x/sys/windows
           
           go mod tidy
 
-      - name: Install rsrc (用于嵌入图标)
+      # ============================
+      # 5. 安装 rsrc（嵌入图标）
+      # ============================
+      - name: Install rsrc
         run: go install github.com/akavel/rsrc@latest
 
-      - name: Generate 64bit app.syso (嵌入 clash.ico)
+      # ============================
+      # 6. 生成 app.syso（托盘图标）
+      # ============================
+      - name: Generate 64bit app.syso
         run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
 
-
+      # ============================
+      # 7. 设置版本号
+      # ============================
       - name: Set Version
         id: set_version
         shell: pwsh
         run: |
           $ver = "${{ inputs.version }}"
           echo "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "当前版本号: $ver"
+          Write-Host "当前版本号: $ver"
 
-      - name: Build Windows EXE (带版本号)
+      # ============================
+      # 8. 构建托盘程序 NetTray.exe
+      # ============================
+      - name: Build NetTray.exe
         run: |
           go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o NetTray.exe .
 
-      - name: Compress with UPX
+      # ============================
+      # 9. 构建守护进程 NetTrayGuard.exe
+      # ============================
+      - name: Build NetTrayGuard.exe
+        run: |
+          go build -trimpath -ldflags "-s -w" -o NetTrayGuard.exe guard.go
+
+      # ============================
+      # 10. UPX 压缩托盘程序
+      # ============================
+      - name: Compress NetTray.exe with UPX
         uses: crazy-max/ghaction-upx@v3
         with:
           version: latest
@@ -68,14 +108,23 @@ jobs:
             NetTray.exe
           args: --${{ inputs.compression_level }} --lzma
 
+      # ============================
+      # 11. 重命名输出文件
+      # ============================
       - name: Rename with Version
         shell: pwsh
         run: |
           $ver = "${{ env.VERSION }}".Replace('/', '-').Replace(':', '-')
           Rename-Item -Path "NetTray.exe" -NewName "NetTray_${ver}.exe"
+          Rename-Item -Path "NetTrayGuard.exe" -NewName "NetTrayGuard_${ver}.exe"
 
+      # ============================
+      # 12. 上传构建产物
+      # ============================
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: NetTray_exe
-          path: NetTray_*.exe
+          name: NetTray_build_${{ env.VERSION }}
+          path: |
+            NetTray_*.exe
+            NetTrayGuard_*.exe
