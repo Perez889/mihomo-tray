@@ -730,9 +730,8 @@ func main() {
 
     app := NewApp()
 
-    // ⭐⭐ 新增：创建隐藏窗口 + 消息循环 ⭐⭐
-    app.createHiddenWindow()
-    go app.messageLoop()
+    // ⭐⭐ 安装关机 Hook（关键） ⭐⭐
+    app.installShutdownHook()
 
     systray.Run(app.onReady, app.onExit)
 }
