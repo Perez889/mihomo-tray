@@ -5,14 +5,15 @@ package main
 import (
     "fmt"
     "os/exec"
-    "syscall"
     "time"
+
+    "golang.org/x/sys/windows"
 )
 
 func disableSystemProxy() {
     cmd := exec.Command("powershell", "-Command",
         `Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
-    cmd.SysProcAttr = &syscall.SysProcAttr{
+    cmd.SysProcAttr = &windows.SysProcAttr{
         HideWindow:    true,
         CreationFlags: 0x08000000,
     }
@@ -25,9 +26,9 @@ func killMihomo() {
 
 func handler(ctrlType uint32) bool {
     switch ctrlType {
-    case syscall.CTRL_SHUTDOWN_EVENT,
-        syscall.CTRL_LOGOFF_EVENT,
-        syscall.CTRL_CLOSE_EVENT:
+    case windows.CTRL_SHUTDOWN_EVENT,
+        windows.CTRL_LOGOFF_EVENT,
+        windows.CTRL_CLOSE_EVENT:
         fmt.Println("NetTrayGuard: 检测到关机/重启/注销 → 清理系统代理")
         disableSystemProxy()
         killMihomo()
@@ -37,7 +38,7 @@ func handler(ctrlType uint32) bool {
 }
 
 func main() {
-    syscall.SetConsoleCtrlHandler(handler, true)
+    windows.SetConsoleCtrlHandler(windows.HandlerFunc(handler), true)
 
     for {
         time.Sleep(10 * time.Second)
