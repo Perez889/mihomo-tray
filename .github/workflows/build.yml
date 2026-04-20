@@ -28,7 +28,28 @@ jobs:
       - uses: actions/checkout@v4
 
       # ============================
-      # 2. 清理 Go 缓存（关键）
+      # 2. Set up Go
+      # ============================
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # ============================
+      # 3. 初始化 go.mod（必须在 clean 之前）
+      # ============================
+      - name: Ensure go.mod exists
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path go.mod)) {
+              Write-Host "go.mod 不存在，正在创建..."
+              go mod init mihomo_tray
+          } else {
+              Write-Host "go.mod 已存在"
+          }
+
+      # ============================
+      # 4. 清理 Go 缓存（现在不会报错）
       # ============================
       - name: Clean Go build cache
         shell: pwsh
@@ -37,43 +58,30 @@ jobs:
           Write-Host "Go 缓存已清理"
 
       # ============================
-      # 3. 安装 Go
+      # 5. 安装依赖
       # ============================
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      # ============================
-      # 4. 初始化 go.mod
-      # ============================
-      - name: Initialize Go module and install dependencies
+      - name: Install dependencies
         shell: pwsh
         run: |
-          if (-Not (Test-Path go.mod)) {
-              go mod init mihomo_tray
-          }
-          
           go get github.com/getlantern/systray
           go get gopkg.in/yaml.v3
           go get golang.org/x/sys/windows
-          
           go mod tidy
 
       # ============================
-      # 5. 安装 rsrc（嵌入图标）
+      # 6. 安装 rsrc（嵌入图标）
       # ============================
       - name: Install rsrc
         run: go install github.com/akavel/rsrc@latest
 
       # ============================
-      # 6. 生成 app.syso（托盘图标）
+      # 7. 生成 app.syso
       # ============================
       - name: Generate 64bit app.syso
         run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
 
       # ============================
-      # 7. 设置版本号
+      # 8. 设置版本号
       # ============================
       - name: Set Version
         id: set_version
@@ -84,21 +92,21 @@ jobs:
           Write-Host "当前版本号: $ver"
 
       # ============================
-      # 8. 构建托盘程序 NetTray.exe
+      # 9. 构建托盘程序 NetTray.exe
       # ============================
       - name: Build NetTray.exe
         run: |
           go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o NetTray.exe .
 
       # ============================
-      # 9. 构建守护进程 NetTrayGuard.exe
+      # 10. 构建守护进程 NetTrayGuard.exe
       # ============================
       - name: Build NetTrayGuard.exe
         run: |
           go build -trimpath -ldflags "-s -w" -o NetTrayGuard.exe guard.go
 
       # ============================
-      # 10. UPX 压缩托盘程序
+      # 11. UPX 压缩托盘程序
       # ============================
       - name: Compress NetTray.exe with UPX
         uses: crazy-max/ghaction-upx@v3
@@ -109,7 +117,7 @@ jobs:
           args: --${{ inputs.compression_level }} --lzma
 
       # ============================
-      # 11. 重命名输出文件
+      # 12. 重命名输出文件
       # ============================
       - name: Rename with Version
         shell: pwsh
@@ -119,7 +127,7 @@ jobs:
           Rename-Item -Path "NetTrayGuard.exe" -NewName "NetTrayGuard_${ver}.exe"
 
       # ============================
-      # 12. 上传构建产物
+      # 13. 上传构建产物
       # ============================
       - name: Upload EXE
         uses: actions/upload-artifact@v4
