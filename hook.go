@@ -4,6 +4,8 @@ package main
 import (
     "syscall"
     "unsafe"
+
+    "golang.org/x/sys/windows"
 )
 
 var (
@@ -22,18 +24,20 @@ var hookHandle uintptr
 
 // Windows 消息结构体
 type CWPSTRUCT struct {
-    lParam uintptr
-    wParam uintptr
+    lParam  uintptr
+    wParam  uintptr
     message uint32
-    hwnd uintptr
+    hwnd    uintptr
 }
 
 func (a *App) installShutdownHook() {
+    tid := windows.GetCurrentThreadId()
+
     hookHandle, _, _ = procSetWindowsHook.Call(
         WH_CALLWNDPROC,
         syscall.NewCallback(a.hookProc),
         0,
-        uintptr(syscall.GetCurrentThreadId()),
+        uintptr(tid),
     )
 }
 
