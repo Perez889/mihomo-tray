@@ -22,34 +22,25 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # ============================
-      # 1. Checkout
-      # ============================
       - uses: actions/checkout@v4
 
-      # ============================
-      # 2. Set up Go
-      # ============================
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
 
       # ============================
-      # 3. 初始化 go.mod（必须最先执行）
+      # 1. 初始化 go.mod（必须最先）
       # ============================
       - name: Ensure go.mod exists
         shell: pwsh
         run: |
           if (-Not (Test-Path go.mod)) {
-              Write-Host "go.mod 不存在，正在创建..."
               go mod init mihomo_tray
-          } else {
-              Write-Host "go.mod 已存在"
           }
 
       # ============================
-      # 4. 安装依赖（必须在 clean 之前）
+      # 2. 安装依赖（必须在 clean 之前）
       # ============================
       - name: Install dependencies
         shell: pwsh
@@ -60,28 +51,28 @@ jobs:
           go mod tidy
 
       # ============================
-      # 5. 清理 Go 缓存（现在不会报错）
+      # 3. 清理 Go build cache（安全）
       # ============================
       - name: Clean Go build cache
         shell: pwsh
         run: |
-          go clean -cache -modcache -i -r
-          Write-Host "Go 缓存已清理"
+          go clean -cache -i -r
+          Write-Host "Go build 缓存已清理"
 
       # ============================
-      # 6. 安装 rsrc（嵌入图标）
+      # 4. 安装 rsrc
       # ============================
       - name: Install rsrc
         run: go install github.com/akavel/rsrc@latest
 
       # ============================
-      # 7. 生成 app.syso
+      # 5. 生成 app.syso
       # ============================
       - name: Generate 64bit app.syso
         run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
 
       # ============================
-      # 8. 设置版本号
+      # 6. 设置版本号
       # ============================
       - name: Set Version
         id: set_version
@@ -89,24 +80,23 @@ jobs:
         run: |
           $ver = "${{ inputs.version }}"
           echo "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "当前版本号: $ver"
 
       # ============================
-      # 9. 构建托盘程序 NetTray.exe
+      # 7. 构建托盘程序
       # ============================
       - name: Build NetTray.exe
         run: |
           go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o NetTray.exe .
 
       # ============================
-      # 10. 构建守护进程 NetTrayGuard.exe
+      # 8. 构建守护进程
       # ============================
       - name: Build NetTrayGuard.exe
         run: |
           go build -trimpath -ldflags "-s -w" -o NetTrayGuard.exe guard.go
 
       # ============================
-      # 11. UPX 压缩托盘程序
+      # 9. UPX 压缩托盘程序
       # ============================
       - name: Compress NetTray.exe with UPX
         uses: crazy-max/ghaction-upx@v3
@@ -117,7 +107,7 @@ jobs:
           args: --${{ inputs.compression_level }} --lzma
 
       # ============================
-      # 12. 重命名输出文件
+      # 10. 重命名输出文件
       # ============================
       - name: Rename with Version
         shell: pwsh
@@ -127,7 +117,7 @@ jobs:
           Rename-Item -Path "NetTrayGuard.exe" -NewName "NetTrayGuard_${ver}.exe"
 
       # ============================
-      # 13. 上传构建产物
+      # 11. 上传构建产物
       # ============================
       - name: Upload EXE
         uses: actions/upload-artifact@v4
