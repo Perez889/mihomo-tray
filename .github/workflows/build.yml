@@ -36,7 +36,7 @@ jobs:
           go-version: '1.23'
 
       # ============================
-      # 3. 初始化 go.mod（必须在 clean 之前）
+      # 3. 初始化 go.mod（必须最先执行）
       # ============================
       - name: Ensure go.mod exists
         shell: pwsh
@@ -49,16 +49,7 @@ jobs:
           }
 
       # ============================
-      # 4. 清理 Go 缓存（现在不会报错）
-      # ============================
-      - name: Clean Go build cache
-        shell: pwsh
-        run: |
-          go clean -cache -modcache -i -r
-          Write-Host "Go 缓存已清理"
-
-      # ============================
-      # 5. 安装依赖
+      # 4. 安装依赖（必须在 clean 之前）
       # ============================
       - name: Install dependencies
         shell: pwsh
@@ -67,6 +58,15 @@ jobs:
           go get gopkg.in/yaml.v3
           go get golang.org/x/sys/windows
           go mod tidy
+
+      # ============================
+      # 5. 清理 Go 缓存（现在不会报错）
+      # ============================
+      - name: Clean Go build cache
+        shell: pwsh
+        run: |
+          go clean -cache -modcache -i -r
+          Write-Host "Go 缓存已清理"
 
       # ============================
       # 6. 安装 rsrc（嵌入图标）
