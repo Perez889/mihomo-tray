@@ -38,7 +38,6 @@ jobs:
           
           go get github.com/getlantern/systray
           go get gopkg.in/yaml.v3
-          go get golang.org/x/sys/windows
           
           go mod tidy
 
@@ -48,6 +47,7 @@ jobs:
       - name: Generate 64bit app.syso (嵌入 clash.ico)
         run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
 
+
       - name: Set Version
         id: set_version
         shell: pwsh
@@ -56,19 +56,9 @@ jobs:
           echo "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "当前版本号: $ver"
 
-      # ============================
-      # 构建托盘程序 NetTray.exe
-      # ============================
       - name: Build Windows EXE (带版本号)
         run: |
           go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" -o NetTray.exe .
-
-      # ============================
-      # ⭐ 构建守护进程 NetTrayGuard.exe
-      # ============================
-      - name: Build NetTrayGuard.exe
-        run: |
-          go build -trimpath -ldflags "-s -w" -o NetTrayGuard.exe ./guard
 
       - name: Compress with UPX
         uses: crazy-max/ghaction-upx@v3
@@ -83,12 +73,9 @@ jobs:
         run: |
           $ver = "${{ env.VERSION }}".Replace('/', '-').Replace(':', '-')
           Rename-Item -Path "NetTray.exe" -NewName "NetTray_${ver}.exe"
-          Rename-Item -Path "NetTrayGuard.exe" -NewName "NetTrayGuard_${ver}.exe"
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
           name: NetTray_exe
-          path: |
-            NetTray_*.exe
-            NetTrayGuard_*.exe
+          path: NetTray_*.exe
