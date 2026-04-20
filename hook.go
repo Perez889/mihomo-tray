@@ -1,61 +1,42 @@
-// hook.go
 package main
 
 import (
+    "os/exec"
     "syscall"
-    "unsafe"
-
-    "golang.org/x/sys/windows"
+    "time"
+    "fmt"
 )
 
-var (
-    user32              = syscall.NewLazyDLL("user32.dll")
-    procSetWindowsHook  = user32.NewProc("SetWindowsHookExW")
-    procCallNextHook    = user32.NewProc("CallNextHookEx")
-)
-
-const (
-    WH_CALLWNDPROC     = 4
-    WM_QUERYENDSESSION = 0x0011
-    WM_ENDSESSION      = 0x0016
-)
-
-var hookHandle uintptr
-
-// Windows 消息结构体
-type CWPSTRUCT struct {
-    lParam  uintptr
-    wParam  uintptr
-    message uint32
-    hwnd    uintptr
+func disableSystemProxy() {
+    cmd := exec.Command("powershell", "-Command",
+        `Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name ProxyEnable -Value 0`)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    _ = cmd.Run()
 }
 
-func (a *App) installShutdownHook() {
-    tid := windows.GetCurrentThreadId()
-
-    hookHandle, _, _ = procSetWindowsHook.Call(
-        WH_CALLWNDPROC,
-        syscall.NewCallback(a.hookProc),
-        0,
-        uintptr(tid),
-    )
+func killMihomo() {
+    exec.Command("taskkill", "/IM", "mihomo.exe", "/F").Run()
 }
 
-func (a *App) hookProc(nCode int, wParam uintptr, lParam uintptr) uintptr {
-    if nCode >= 0 {
-        msg := (*CWPSTRUCT)(unsafe.Pointer(lParam))
-        switch msg.message {
-        case WM_QUERYENDSESSION, WM_ENDSESSION:
-            a.log("收到系统关机/重启/注销信号 → 自动关闭系统代理")
-            a.disableSystemProxy()
-            if a.isTUNEnabled {
-                _ = a.setTun(false)
-            }
-            if a.mihomoCmd != nil && a.mihomoCmd.Process != nil {
-                _ = a.mihomoCmd.Process.Kill()
-            }
+func main() {
+    fmt.Println("NetTrayGuard started")
+
+    // 注册关机事件
+    syscall.SetConsoleCtrlHandler(func(ctrlType uint32) bool {
+        switch ctrlType {
+        case syscall.CTRL_SHUTDOWN_EVENT,
+            syscall.CTRL_LOGOFF_EVENT,
+            syscall.CTRL_CLOSE_EVENT:
+            fmt.Println("Shutdown detected → cleaning up")
+            disableSystemProxy()
+            killMihomo()
+            return true
         }
+        return false
+    }, true)
+
+    // 守护进程永不退出
+    for {
+        time.Sleep(10 * time.Second)
     }
-    ret, _, _ := procCallNextHook.Call(0, uintptr(nCode), wParam, lParam)
-    return ret
 }
