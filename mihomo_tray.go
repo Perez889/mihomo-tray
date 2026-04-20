@@ -720,13 +720,19 @@ func (a *App) appDir() string {
 
 // ==================== 主入口 ====================
 func main() {
-	ensureSingleInstance()
-	if runtime.GOOS == "windows" && !isAdmin() {
-		fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
-		runAsAdmin()
-		time.Sleep(1 * time.Second)
-		os.Exit(0)
-	}
-	app := NewApp()
-	systray.Run(app.onReady, app.onExit)
+    ensureSingleInstance()
+    if runtime.GOOS == "windows" && !isAdmin() {
+        fmt.Println("当前未以管理员权限运行，正在请求 UAC 提升...")
+        runAsAdmin()
+        time.Sleep(1 * time.Second)
+        os.Exit(0)
+    }
+
+    app := NewApp()
+
+    // ⭐⭐ 新增：创建隐藏窗口 + 消息循环 ⭐⭐
+    app.createHiddenWindow()
+    go app.messageLoop()
+
+    systray.Run(app.onReady, app.onExit)
 }
