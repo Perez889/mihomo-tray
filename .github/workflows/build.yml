@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（例如 v1.3.2）'
+        description: '版本号（例如 v1.3.3）'
         required: true
-        default: 'v1.3.2'
+        default: 'v1.3.3'
       compression_level:
         description: 'UPX 压缩等级'
         required: false
@@ -27,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'   # 暂时保持 1.23，避免过多升级
+          go-version: '1.23'
 
       - name: Initialize Go module and install dependencies
         shell: pwsh
@@ -37,7 +37,7 @@ jobs:
           }
           
           go get github.com/getlantern/systray
-          go get github.com/webview/webview_go          # ← 改成这个
+          go get github.com/webview/webview_go
           go get gopkg.in/yaml.v3
           go get golang.org/x/sys/windows
           
@@ -82,3 +82,9 @@ jobs:
         with:
           name: NetTray_exe
           path: NetTray_*.exe
+
+      - name: Show Build Result
+        shell: pwsh
+        run: |
+          Write-Host "✅ 构建完成！" -ForegroundColor Green
+          Get-ChildItem NetTray_*.exe | Select-Object Name, Length | Format-Table
