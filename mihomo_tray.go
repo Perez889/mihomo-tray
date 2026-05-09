@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
-	"github.com/webview/webview/v2"
+	"github.com/webview/webview_go"
 	"golang.org/x/sys/windows"
 	"gopkg.in/yaml.v3"
 )
