@@ -27,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.23'   # 暂时保持 1.23，避免过多升级
 
       - name: Initialize Go module and install dependencies
         shell: pwsh
@@ -37,16 +37,16 @@ jobs:
           }
           
           go get github.com/getlantern/systray
-          go get github.com/webview/webview/v2
+          go get github.com/webview/webview_go          # ← 改成这个
           go get gopkg.in/yaml.v3
           go get golang.org/x/sys/windows
           
           go mod tidy
 
-      - name: Install rsrc (用于嵌入图标和 manifest)
+      - name: Install rsrc (用于嵌入图标)
         run: go install github.com/akavel/rsrc@latest
 
-      - name: Generate app.syso (嵌入主图标)
+      - name: Generate app.syso (嵌入程序图标)
         run: rsrc -arch amd64 -ico icon/logo.ico -o app.syso
 
       - name: Set Version
@@ -57,7 +57,7 @@ jobs:
           echo "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "当前版本号: $ver"
 
-      - name: Build Windows EXE (带版本号 + WebView2)
+      - name: Build Windows EXE
         run: |
           go build -trimpath `
             -ldflags "-H=windowsgui -s -w -X main.Version=${{ env.VERSION }}" `
@@ -82,9 +82,3 @@ jobs:
         with:
           name: NetTray_exe
           path: NetTray_*.exe
-
-      - name: Show Build Info
-        shell: pwsh
-        run: |
-          Write-Host "✅ 构建完成！"
-          Get-ChildItem NetTray_*.exe | Select-Object Name, Length
