@@ -24,7 +24,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.3.2"
+var Version = "1.3.3"
 
 // ==================== 图标嵌入 ====================
 //go:embed icon/tray.ico
@@ -138,11 +138,11 @@ func (a *App) checkFirstRun() {
 	if _, err := os.Stat(flagFile); os.IsNotExist(err) {
 		a.firstRun = true
 		_ = os.WriteFile(flagFile, []byte(time.Now().Format("2006-01-02")), 0666)
-		a.log("检测到首次运行，将创建 Zashboard 桌面快捷方式")
+		a.log("检测到首次运行，将创建 Zashboard 快捷方式")
 	}
 }
 
-// ==================== 创建快捷方式（桌面 + 开始菜单） ====================
+// ==================== 创建快捷方式 ====================
 func (a *App) createZashboardShortcuts() {
 	if !a.firstRun {
 		return
@@ -163,7 +163,7 @@ func (a *App) createZashboardShortcuts() {
 	a.createShortcut(filepath.Join(desktopPath, shortcutName), exePath, "--open-zashboard", "Zashboard 面板", icoPath)
 	a.createShortcut(filepath.Join(startMenuPath, shortcutName), exePath, "--open-zashboard", "Zashboard 面板", icoPath)
 
-	a.log("✅ 已创建 Zashboard 桌面快捷方式（开始菜单快捷方式已同时创建，方便固定到任务栏）")
+	a.log("✅ 已创建 Zashboard 桌面和开始菜单快捷方式")
 }
 
 func (a *App) createShortcut(lnkPath, target, args, desc, iconPath string) {
@@ -173,7 +173,7 @@ $Shortcut.TargetPath = "%s"
 $Shortcut.Arguments = "%s"
 $Shortcut.WorkingDirectory = "%s"
 $Shortcut.Description = "%s"
-$Shortcut.IconLocation = "%s"
+$Shortcut.IconLocation = "%s,0"
 $Shortcut.WindowStyle = 1
 $Shortcut.Save()`, lnkPath, target, args, filepath.Dir(target), desc, iconPath)
 
@@ -192,7 +192,7 @@ func (a *App) openEmbeddedDashboard() {
 	defer w.Destroy()
 
 	w.SetTitle("Zashboard - Mihomo")
-	w.SetSize(1366, 940, webview.HintNone)
+	w.SetSize(1420, 980, webview.HintNone)
 	w.Navigate(a.dashboardURL)
 
 	a.logf("WebView2 Zashboard 已打开 → %s", a.dashboardURL)
@@ -389,7 +389,6 @@ func (a *App) onReady() {
 
 	go a.startMihomo()
 
-	// 同步状态
 	go func() {
 		for {
 			if a.isPortOpen(a.controllerAddr) {
@@ -709,11 +708,15 @@ func (a *App) appDir() string {
 // ==================== 命令行参数处理 ====================
 func handleCommandLine() {
 	if len(os.Args) > 1 && os.Args[1] == "--open-zashboard" {
+		fmt.Println("【快捷方式启动】检测到 --open-zashboard 参数")
 		app := NewApp()
+
 		if !app.isPortOpen(app.controllerAddr) {
+			fmt.Println("【快捷方式启动】mihomo 未运行，自动启动...")
 			app.startMihomoForce()
-			time.Sleep(1800 * time.Millisecond)
+			time.Sleep(2800 * time.Millisecond)
 		}
+
 		app.openEmbeddedDashboard()
 		os.Exit(0)
 	}
@@ -721,6 +724,8 @@ func handleCommandLine() {
 
 // ==================== main ====================
 func main() {
+	fmt.Println("NetTray 启动，命令行参数:", os.Args)
+
 	ensureSingleInstance()
 
 	if runtime.GOOS == "windows" && !isAdmin() {
