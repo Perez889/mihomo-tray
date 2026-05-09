@@ -24,7 +24,7 @@ import (
 )
 
 // ==================== 版本号 ====================
-var Version = "1.3.3"
+var Version = "1.3.4"
 
 // ==================== 图标嵌入 ====================
 //go:embed icon/tray.ico
@@ -147,7 +147,6 @@ func (a *App) createZashboardShortcuts() {
 	if !a.firstRun {
 		return
 	}
-
 	exePath, _ := os.Executable()
 	baseDir := a.appDir()
 	desktopPath := filepath.Join(os.Getenv("USERPROFILE"), "Desktop")
@@ -159,7 +158,6 @@ func (a *App) createZashboardShortcuts() {
 	}
 
 	shortcutName := "Zashboard.lnk"
-
 	a.createShortcut(filepath.Join(desktopPath, shortcutName), exePath, "--open-zashboard", "Zashboard 面板", icoPath)
 	a.createShortcut(filepath.Join(startMenuPath, shortcutName), exePath, "--open-zashboard", "Zashboard 面板", icoPath)
 
@@ -182,11 +180,13 @@ $Shortcut.Save()`, lnkPath, target, args, filepath.Dir(target), desc, iconPath)
 	_ = cmd.Run()
 }
 
-// ==================== WebView2 打开面板 ====================
+// ==================== WebView2 打开面板（已优化空白问题） ====================
 func (a *App) openEmbeddedDashboard() {
 	if a.dashboardURL == "" {
 		a.buildDashboardURL()
 	}
+
+	a.logf("正在打开 WebView2 → %s", a.dashboardURL)
 
 	w := webview.New(true)
 	defer w.Destroy()
@@ -195,7 +195,7 @@ func (a *App) openEmbeddedDashboard() {
 	w.SetSize(1420, 980, webview.HintNone)
 	w.Navigate(a.dashboardURL)
 
-	a.logf("WebView2 Zashboard 已打开 → %s", a.dashboardURL)
+	a.log("WebView2 窗口已启动，等待加载...")
 	w.Run()
 }
 
@@ -708,13 +708,13 @@ func (a *App) appDir() string {
 // ==================== 命令行参数处理 ====================
 func handleCommandLine() {
 	if len(os.Args) > 1 && os.Args[1] == "--open-zashboard" {
-		fmt.Println("【快捷方式启动】检测到 --open-zashboard 参数")
+		fmt.Println("【快捷方式启动】检测到 --open-zashboard")
 		app := NewApp()
 
 		if !app.isPortOpen(app.controllerAddr) {
 			fmt.Println("【快捷方式启动】mihomo 未运行，自动启动...")
 			app.startMihomoForce()
-			time.Sleep(2800 * time.Millisecond)
+			time.Sleep(3000 * time.Millisecond)
 		}
 
 		app.openEmbeddedDashboard()
@@ -724,7 +724,7 @@ func handleCommandLine() {
 
 // ==================== main ====================
 func main() {
-	fmt.Println("NetTray 启动，命令行参数:", os.Args)
+	fmt.Println("NetTray 启动，参数:", os.Args)
 
 	ensureSingleInstance()
 
